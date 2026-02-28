@@ -1,0 +1,2 @@
+# Markdown-to-PPT-AI_ECL
+使用AI智能的把Markdown文本中各种内容占位符来转成PPT文件，本项目是由Echineselearning平台开发和维护。
