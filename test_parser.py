@@ -1,7 +1,7 @@
 from src.utils.md_parser import MDParser
 
 # 测试markdown解析
-parser = MDParser('# 说白色（shuō bái sè）.MD')
+parser = MDParser('# 说白色.md')
 content = parser.parse()
 
 print('一级标题:', content['h0'])
