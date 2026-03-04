@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 PPT生成器 - 智能模板匹配版本
-直接在模板上操作，根据MD内容匹配模板并清除多余占位符
+直接复制模板文件，按需填充内容并清除多余占位符
 """
 
 from pptx import Presentation
@@ -11,6 +11,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.dml.color import RGBColor
 import re
 from pypinyin import pinyin, Style
+import copy
 
 class PPTGenerator:
     def __init__(self, template_path, md_content):
@@ -24,8 +25,7 @@ class PPTGenerator:
         self.templates = {
             'cover': None,
             'section': None,
-            'end': None,
-            'content': []  # [(idx, text_count, img_count, slide), ...]
+            'content': []
         }
         
         for idx, slide in enumerate(self.presentation.slides):
@@ -33,27 +33,28 @@ class PPTGenerator:
             img_count = self._count_images(slide)
             
             if 'h0_0' in placeholders:
-                self.templates['cover'] = (idx, slide)
+                self.templates['cover'] = {'idx': idx, 'slide': slide}
             elif 'h1_0' in placeholders and 'h2_0' not in placeholders:
-                self.templates['section'] = (idx, slide)
+                self.templates['section'] = {'idx': idx, 'slide': slide}
             elif 'h2_0' in placeholders:
                 text_count = len([p for p in placeholders if p.startswith('h3_')])
-                self.templates['content'].append((idx, text_count, img_count, slide))
-            elif not placeholders:
-                if self.templates['end'] is None:
-                    self.templates['end'] = (idx, slide)
+                self.templates['content'].append({
+                    'idx': idx,
+                    'text_count': text_count,
+                    'img_count': img_count,
+                    'slide': slide
+                })
         
         # 按文本框数排序
-        self.templates['content'].sort(key=lambda x: (x[1], x[2]))
+        self.templates['content'].sort(key=lambda x: (x['text_count'], x['img_count']))
         
         print(f"\n=== 模板分析 ===")
         if self.templates['cover']:
-            print(f"封面页: 第{self.templates['cover'][0]+1}页")
-        if self.templates['section']:
-            print(f"章节页: 第{self.templates['section'][0]+1}页")
+            print(f"封面页: 第{self.templates['cover']['idx']+1}页")
         print(f"正文模板: {len(self.templates['content'])}个")
-        for idx, tc, ic, _ in self.templates['content']:
-            print(f"  - 第{idx+1}页: 文本{tc}个, 图片{ic}张")
+        for t in self.templates['content'][:5]:
+            print(f"  - 第{t['idx']+1}页: 文本{t['text_count']}个, 图片{t['img_count']}张")
+        print("  ...")
     
     def _count_images(self, slide):
         """统计页面中的图片数量"""
@@ -63,33 +64,35 @@ class PPTGenerator:
                 count += 1
         return count
     
-    def _find_best_template_idx(self, text_count, img_count=0):
-        """找到最佳匹配的模板索引"""
+    def _find_best_template(self, text_count, img_count=0):
+        """找到最佳匹配的模板"""
         candidates = self.templates['content']
         
         if not candidates:
             return None
         
-        best_idx = None
+        best_match = None
         best_score = float('inf')
         
-        for idx, tc, ic, slide in candidates:
+        for template in candidates:
+            t_text = template['text_count']
+            
             # 文本框数必须足够
-            if tc < text_count:
+            if t_text < text_count:
                 continue
             
             # 分数：越接近越好
-            score = (tc - text_count) * 10 + (ic - img_count)
+            score = t_text - text_count
             
             if score < best_score:
                 best_score = score
-                best_idx = idx
+                best_match = template
         
-        # 如果没有匹配，返回文本框最多的
-        if best_idx is None:
-            best_idx = max(candidates, key=lambda x: x[1])[0]
+        # 如果没有匹配，选择文本框最多的
+        if best_match is None:
+            best_match = max(candidates, key=lambda x: x['text_count'])
         
-        return best_idx
+        return best_match
     
     def _find_all_placeholders(self, slide):
         """查找页面所有占位符"""
@@ -253,7 +256,7 @@ class PPTGenerator:
                 self._clear_placeholder(slide, name)
                 cleared.append(name)
         if cleared:
-            print(f"    清除占位符: {cleared}")
+            print(f"    清除: {cleared}")
     
     def _clear_all_placeholders(self, slide):
         """清除页面所有占位符"""
@@ -261,86 +264,114 @@ class PPTGenerator:
         for name in placeholders:
             self._clear_placeholder(slide, name)
     
+    def _duplicate_slide(self, slide_idx):
+        """复制指定索引的幻灯片"""
+        from copy import deepcopy
+        
+        source = self.presentation.slides[slide_idx]
+        slide_layout = source.slide_layout
+        
+        # 使用相同layout创建新幻灯片
+        new_slide = self.presentation.slides.add_slide(slide_layout)
+        
+        # 获取新幻灯片的索引
+        new_idx = len(self.presentation.slides) - 1
+        
+        return new_idx, new_slide
+    
     def generate(self):
-        """生成PPT - 直接在模板上操作"""
+        """生成PPT"""
         print("\n=== 开始生成PPT ===")
         
-        # 1. 计算需要生成的内容
-        pages_needed = []
+        # 收集需要生成的内容
+        pages_to_generate = []
         
         # 封面页
         if self.md_content['h0']:
-            pages_needed.append({'type': 'cover', 'title': self.md_content['h0'][0], 'contents': []})
+            pages_to_generate.append({
+                'type': 'cover',
+                'title': self.md_content['h0'][0],
+                'contents': []
+            })
         
         # 正文页
         for h2 in self.md_content['h2']:
-            pages_needed.append({
+            pages_to_generate.append({
                 'type': 'content',
                 'title': h2['title'],
                 'contents': h2.get('content', []),
                 'images': h2.get('images', [])
             })
         
-        print(f"需要生成 {len(pages_needed)} 页")
+        print(f"需要生成 {len(pages_to_generate)} 页")
         
-        # 2. 清除所有现有页面的占位符内容
-        print("\n清除模板占位符...")
-        for slide in self.presentation.slides:
-            self._clear_all_placeholders(slide)
+        # 记录需要保留的幻灯片索引
+        slides_to_keep = []
         
-        # 3. 按需填充内容
-        slide_idx = 0
-        
-        for i, page in enumerate(pages_needed):
+        # 生成每一页
+        for i, page in enumerate(pages_to_generate):
             print(f"\n第{i+1}页: {page['type']} - {page['title'][:15]}...")
             
-            if slide_idx >= len(self.presentation.slides):
-                print("  警告: 模板页数不足")
-                break
-            
-            slide = self.presentation.slides[slide_idx]
-            
             if page['type'] == 'cover':
-                # 封面页
+                # 封面页 - 使用封面模板
                 if self.templates['cover']:
-                    cover_slide = self.presentation.slides[self.templates['cover'][0]]
-                    self._replace_placeholder_with_pinyin(cover_slide, 'h0_0', page['title'], font_size=36)
-                    self._clear_unused_placeholders(cover_slide, ['h0_0'])
-                    print(f"  封面已填充: {page['title']}")
-                slide_idx += 1
+                    template_idx = self.templates['cover']['idx']
+                    slide = self.presentation.slides[template_idx]
+                    
+                    # 填充内容
+                    self._replace_placeholder_with_pinyin(slide, 'h0_0', page['title'], font_size=36)
+                    self._clear_unused_placeholders(slide, ['h0_0'])
+                    slides_to_keep.append(template_idx)
+                    print(f"  封面已填充")
             
             elif page['type'] == 'content':
-                # 正文页 - 找最佳模板
+                # 正文页
                 text_count = len(page['contents'])
                 img_count = len(page.get('images', []))
                 
-                best_idx = self._find_best_template_idx(text_count, img_count)
-                
-                if best_idx is not None:
-                    content_slide = self.presentation.slides[best_idx]
+                template = self._find_best_template(text_count, img_count)
+                if template:
+                    template_idx = template['idx']
+                    
+                    # 如果这个模板已经被使用过，复制一份
+                    if template_idx in slides_to_keep:
+                        # 复制幻灯片
+                        new_idx, slide = self._duplicate_slide(template_idx)
+                        print(f"  复制模板第{template_idx+1}页 -> 新页{new_idx+1}")
+                        slides_to_keep.append(new_idx)
+                    else:
+                        slide = self.presentation.slides[template_idx]
+                        slides_to_keep.append(template_idx)
+                        print(f"  使用模板第{template_idx+1}页")
                     
                     # 填充内容
                     used = ['h2_0']
-                    self._replace_placeholder_with_pinyin(content_slide, 'h2_0', page['title'], font_size=28)
+                    self._replace_placeholder_with_pinyin(slide, 'h2_0', page['title'], font_size=28)
                     
                     for j, text in enumerate(page['contents']):
                         placeholder = f'h3_{j}'
-                        self._replace_placeholder_with_pinyin(content_slide, placeholder, text, font_size=20)
+                        self._replace_placeholder_with_pinyin(slide, placeholder, text, font_size=20)
                         used.append(placeholder)
                     
-                    self._clear_unused_placeholders(content_slide, used)
-                    print(f"  匹配模板第{best_idx+1}页, 文本{text_count}个")
-                else:
-                    print("  警告: 没有匹配的模板")
-                
-                slide_idx += 1
+                    self._clear_unused_placeholders(slide, used)
         
-        # 4. 保存
+        # 删除不需要的幻灯片（从后往前删除）
+        all_indices = set(range(len(self.presentation.slides)))
+        indices_to_remove = sorted(all_indices - set(slides_to_keep), reverse=True)
+        
+        print(f"\n删除 {len(indices_to_remove)} 个未使用的模板页...")
+        for idx in indices_to_remove:
+            rId = self.presentation.slides._sldIdLst[idx].rId
+            self.presentation.part.drop_rel(rId)
+            del self.presentation.slides._sldIdLst[idx]
+        
+        # 保存
         output_path = 'output.pptx'
         self.presentation.save(output_path)
         
         print(f"\n=== PPT生成完成 ===")
         print(f"输出文件: {output_path}")
+        print(f"总页数: {len(self.presentation.slides)}")
         
         return output_path
 
