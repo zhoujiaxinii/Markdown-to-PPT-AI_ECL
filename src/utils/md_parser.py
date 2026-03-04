@@ -36,7 +36,7 @@ class MDParser:
             if line.startswith('# ') and not line.startswith('##'):
                 if current_h2:
                     parsed_content = self._parse_content(current_content)
-                    result['h2'].append(self._create_h2_item(current_h2, parsed_content))
+                    result['h2'].append(self._create_h2_item(current_h2, parsed_content, current_h1))
                     current_content = []
                 if current_h1:
                     result['h1'].append(current_h1)
@@ -48,7 +48,7 @@ class MDParser:
             elif line.startswith('## ') and not line.startswith('###'):
                 if current_h2:
                     parsed_content = self._parse_content(current_content)
-                    result['h2'].append(self._create_h2_item(current_h2, parsed_content))
+                    result['h2'].append(self._create_h2_item(current_h2, parsed_content, current_h1))
                     current_content = []
                 # 保存当前的章节名
                 if current_h1:
@@ -60,7 +60,7 @@ class MDParser:
             elif line.startswith('### ') and not line.startswith('####'):
                 if current_h2:
                     parsed_content = self._parse_content(current_content)
-                    result['h2'].append(self._create_h2_item(current_h2, parsed_content))
+                    result['h2'].append(self._create_h2_item(current_h2, parsed_content, current_h1))
                     current_content = []
                 current_h2 = line[4:].strip()
             
@@ -99,17 +99,18 @@ class MDParser:
         # 处理最后一个小节
         if current_h2:
             parsed_content = self._parse_content(current_content)
-            result['h2'].append(self._create_h2_item(current_h2, parsed_content))
+            result['h2'].append(self._create_h2_item(current_h2, parsed_content, current_h1))
         elif current_h1:
             result['h1'].append(current_h1)
         
         return result
     
-    def _create_h2_item(self, title, parsed_content):
-        """创建小节项，包含字数限制提示"""
+    def _create_h2_item(self, title, parsed_content, section=None):
+        """创建小节项，包含字数限制提示和所属章节"""
         char_count = parsed_content['char_count']
         return {
             'title': title,
+            'section': section,  # 所属章节
             'content': parsed_content['texts'],
             'images': parsed_content['images'],
             'video': parsed_content['video'],
