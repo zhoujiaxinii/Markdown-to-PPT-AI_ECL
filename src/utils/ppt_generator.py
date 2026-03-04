@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-PPT生成器 - Ruby格式版本v2
-每个汉字正上方显示对应拼音，中轴线对齐，字号字体一致
+PPT生成器 - 混合格式版本
+保留文本显示，同时添加ruby拼音
 """
 
 from pptx import Presentation
@@ -19,8 +19,8 @@ class PPTGenerator:
         self.md_content = md_content
         self.presentation = Presentation(template_path)
     
-    def _create_ruby_text(self, text_frame, text, font_size=24):
-        """使用Ruby格式创建拼音在汉字正上方 - 改进版"""
+    def _create_text_with_ruby(self, text_frame, text, font_size=24):
+        """创建带Ruby拼音的文本，同时保留可见文本"""
         text_frame.clear()
         
         from pypinyin import pinyin as py_func, Style
@@ -30,60 +30,61 @@ class PPTGenerator:
         if not text_frame.paragraphs:
             text_frame.add_paragraph()
         para = text_frame.paragraphs[0]
+        para.font.size = Pt(font_size)
         
-        # 为每个字符创建ruby
+        # 遍历每个字符
         for char in text:
             if '\u4e00' <= char <= '\u9fff':  # 汉字
                 # 获取拼音
                 py = py_func(char, style=Style.TONE)[0][0]
                 py = re.sub(r'(\d)$', '', py)  # 去掉声调
                 
-                # 创建run
+                # 创建run - 先显示拼音+汉字的普通文本
                 run = para.add_run()
+                run.text = f'{py} {char}'  # 显示 "拼音 汉字" 格式
+                run.font.size = Pt(font_size)
                 
-                # 创建ruby元素
-                ruby = OxmlElement('a:ruby')
-                
-                # rubyPr - 拼音属性（使用与汉字相同的字号）
-                rubyPr = OxmlElement('a:rubyPr')
-                rubyPr.set(qn('a:rubyFont'), 'Arial')
-                # 使用相同字号
-                rubyPr.set('sz', str(int(font_size * 100)))
-                
-                # bt - 汉字（base text）
-                bt = OxmlElement('a:bt')
-                t_bt = OxmlElement('a:t')
-                t_bt.text = char
-                bt.append(t_bt)
-                
-                # rt - 拼音（ruby text）
-                rt = OxmlElement('a:rt')
-                t_rt = OxmlElement('a:t')
-                t_rt.text = py
-                rt.append(t_rt)
-                
-                ruby.append(rubyPr)
-                ruby.append(bt)
-                ruby.append(rt)
-                
-                run._r.append(ruby)
+                # 同时添加ruby元素（用于精确显示）
+                try:
+                    ruby = OxmlElement('a:ruby')
+                    
+                    rubyPr = OxmlElement('a:rubyPr')
+                    rubyPr.set(qn('a:rubyFont'), 'Arial')
+                    rubyPr.set('sz', str(int(font_size * 100)))
+                    
+                    bt = OxmlElement('a:bt')
+                    t_bt = OxmlElement('a:t')
+                    t_bt.text = char
+                    bt.append(t_bt)
+                    
+                    rt = OxmlElement('a:rt')
+                    t_rt = OxmlElement('a:t')
+                    t_rt.text = py
+                    rt.append(t_rt)
+                    
+                    ruby.append(rubyPr)
+                    ruby.append(bt)
+                    ruby.append(rt)
+                    
+                    run._r.append(ruby)
+                except:
+                    pass
                 
             else:  # 非汉字
                 run = para.add_run()
                 run.text = char
+                run.font.size = Pt(font_size)
     
     def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
-        """替换占位符并添加Ruby格式拼音"""
+        """替换占位符并添加拼音"""
         for shape in slide.shapes:
             if shape.has_text_frame:
                 text_frame = shape.text_frame
                 
-                # 检查每个段落
                 for para in text_frame.paragraphs:
                     for run in para.runs:
                         if placeholder_type in run.text:
-                            # 找到占位符，用ruby文本替换
-                            self._create_ruby_text(text_frame, content, font_size)
+                            self._create_text_with_ruby(text_frame, content, font_size)
                             return True
         return False
     
