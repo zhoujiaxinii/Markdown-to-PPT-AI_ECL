@@ -38,16 +38,10 @@ class PPTGenerator:
         return pinyin_list, char_list
     
     def _create_pinyin_table(self, slide, left, top, width, height, text, font_size=24):
-        """创建拼音-汉字对齐表格
+        """创建拼音-汉字对齐表格（紧凑版）
         
-        表格结构：
-        ┌─────┬─────┬─────┬─────┐
-        │ zhè │ shì │ bái │ sè  │  ← 拼音行
-        ├─────┼─────┼─────┼─────┤
-        │ 这  │ 是  │ 白  │ 色  │  ← 汉字行
-        └─────┴─────┴─────┴─────┘
-        
-        每个单元格包含一个拼音-汉字对，保证精确对齐
+        字符间距：拼音之间1个字母距离，汉字跟随拼音
+        无边框、无底色
         """
         pinyin_list, char_list = self._parse_pinyin_chars(text)
         
@@ -55,27 +49,51 @@ class PPTGenerator:
             return None
         
         num_chars = len(char_list)
-        
-        # 创建表格：2行 x N列
         rows = 2
         cols = num_chars
         
-        # 使用幻灯片的尺寸单位（EMU）
-        table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+        # 计算每个字符的实际宽度（根据拼音长度）
+        # 字号对应的EMU单位：Pt -> Inches -> EMU
+        # 1 Pt = 1/72 Inch, 1 Inch = 914400 EMU
+        pt_to_emu = lambda pt: int(pt * 914400 / 72)
+        
+        # 计算每个列的宽度：拼音长度 + 1个字母间距
+        col_widths = []
+        letter_width_emu = pt_to_emu(font_size * 0.5)  # 一个字母约等于0.5个字号宽度
+        
+        for py in pinyin_list:
+            # 拼音长度（没有拼音的取1）
+            py_len = len(py) if py else 1
+            # 列宽 = 拼音宽度 + 1个字母间距
+            col_width = pt_to_emu(font_size * 0.6) * py_len + letter_width_emu
+            col_widths.append(col_width)
+        
+        # 计算表格总宽度
+        total_width = sum(col_widths)
+        
+        # 如果计算宽度超过可用宽度，按比例缩放
+        if total_width > width:
+            scale = width / total_width
+            col_widths = [int(w * scale) for w in col_widths]
+            total_width = sum(col_widths)
+        
+        # 创建表格
+        table_shape = slide.shapes.add_table(rows, cols, left, top, total_width, height)
         table = table_shape.table
         
-        # 设置列宽（均分）
-        col_width = width // cols
-        for col_idx in range(cols):
+        # 设置列宽
+        for col_idx, col_width in enumerate(col_widths):
             table.columns[col_idx].width = col_width
         
-        # 设置行高
-        table.rows[0].height = height // 2  # 拼音行
-        table.rows[1].height = height // 2  # 汉字行
+        # 设置行高（拼音行稍小，汉字行稍大）
+        pinyin_height = int(height * 0.45)
+        char_height = int(height * 0.55)
+        table.rows[0].height = pinyin_height
+        table.rows[1].height = char_height
         
         # 填充表格
         for col_idx, (py, char) in enumerate(zip(pinyin_list, char_list)):
-            # 拼音单元格（第0行）
+            # 拼音单元格
             pinyin_cell = table.cell(0, col_idx)
             pinyin_cell.text = py
             pinyin_para = pinyin_cell.text_frame.paragraphs[0]
@@ -85,7 +103,7 @@ class PPTGenerator:
             pinyin_para.alignment = PP_ALIGN.CENTER
             pinyin_cell.vertical_anchor = MSO_ANCHOR.BOTTOM
             
-            # 汉字单元格（第1行）
+            # 汉字单元格
             char_cell = table.cell(1, col_idx)
             char_cell.text = char
             char_para = char_cell.text_frame.paragraphs[0]
@@ -95,39 +113,52 @@ class PPTGenerator:
             char_para.alignment = PP_ALIGN.CENTER
             char_cell.vertical_anchor = MSO_ANCHOR.TOP
         
-        # 隐藏表格边框
-        self._hide_table_borders(table)
+        # 隐藏表格边框和底色
+        self._hide_table_style(table)
         
         return table_shape
     
-    def _hide_table_borders(self, table):
-        """隐藏表格边框"""
+    def _hide_table_style(self, table):
+        """隐藏表格边框和底色"""
+        from lxml import etree
+        
+        # 获取表格元素
         tbl = table._tbl
         
-        # 设置表格样式为无框线
+        # 方法1：设置整个表格的样式为无框线、无填充
         tblPr = tbl.tblPr
         if tblPr is None:
-            tblPr = parse_xml(r'<a:tblPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>')
-            tbl.insert(0, tblPr)
+            tblPr = etree.SubElement(tbl, '{http://schemas.openxmlformats.org/drawingml/2006/main}tblPr')
         
-        # 遍历所有单元格，移除边框
+        # 设置表格边框为无
+        tblBorders = etree.SubElement(tblPr, '{http://schemas.openxmlformats.org/drawingml/2006/main}tblBorders')
+        for border_name in ['left', 'right', 'top', 'bottom', 'insideH', 'insideV']:
+            border = etree.SubElement(tblBorders, '{http://schemas.openxmlformats.org/drawingml/2006/main}' + border_name)
+            border.set('w', '0')
+            noFill = etree.SubElement(border, '{http://schemas.openxmlformats.org/drawingml/2006/main}noFill')
+        
+        # 方法2：设置每个单元格的边框和填充为无
         for row in table.rows:
             for cell in row.cells:
-                tcPr = cell._tc.get_or_add_tcPr()
-                # 设置边框为无
-                lnL = parse_xml(r'<a:lnL w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnL>')
-                lnR = parse_xml(r'<a:lnR w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnR>')
-                lnT = parse_xml(r'<a:lnT w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnT>')
-                lnB = parse_xml(r'<a:lnB w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnB>')
+                tc = cell._tc
+                tcPr = tc.get_or_add_tcPr()
                 
-                # 尝试添加边框设置
-                try:
-                    tcPr.append(lnL)
-                    tcPr.append(lnR)
-                    tcPr.append(lnT)
-                    tcPr.append(lnB)
-                except:
-                    pass
+                # 清除所有已有的边框设置
+                for child in list(tcPr):
+                    if 'ln' in child.tag:
+                        tcPr.remove(child)
+                
+                # 设置所有边框为无
+                for border_name in ['lnL', 'lnR', 'lnT', 'lnB']:
+                    ln = etree.SubElement(tcPr, '{http://schemas.openxmlformats.org/drawingml/2006/main}' + border_name)
+                    ln.set('w', '0')
+                    etree.SubElement(ln, '{http://schemas.openxmlformats.org/drawingml/2006/main}noFill')
+                
+                # 设置无填充（透明背景）
+                solidFill = tcPr.find('{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill')
+                if solidFill is not None:
+                    tcPr.remove(solidFill)
+                noFill = etree.SubElement(tcPr, '{http://schemas.openxmlformats.org/drawingml/2006/main}noFill')
     
     def _replace_placeholder_with_pinyin_table(self, slide, placeholder_type, content, font_size=24):
         """替换占位符为拼音-汉字表格"""
