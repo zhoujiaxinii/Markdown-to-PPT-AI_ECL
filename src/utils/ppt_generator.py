@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 PPT生成器
-支持：1-4文本框、0-5图片、音视频模板匹配、拼音标注（汉字正上方、等大、对其）
+支持：1-4文本框、0-5图片、音视频模板匹配、拼音标注（双行对齐格式）
 """
 
 from pptx import Presentation
@@ -19,187 +19,121 @@ class PPTGenerator:
         self.md_content = md_content
         self.presentation = Presentation(template_path)
     
-    def _create_text_with_pinyin_ruby(self, text_frame, text, font_size=24):
-        """在文本框中创建拼音在汉字正上方、等大的格式
+    def _create_pinyin_two_lines(self, shape, text, font_size=24):
+        """创建拼音在汉字上方等大的双行格式
         
-        使用Ruby（注音）格式：拼音和汉字上下对齐，大小相同
+        方案：删除原文本框，创建两个新的文本框
+        - 上方：拼音
+        - 下方：汉字
+        - 宽度完全相同，完全对齐
+        """
+        # 获取原文本框的位置
+        left = shape.left
+        top = shape.top
+        width = shape.width
+        height = shape.height
+        
+        # 删除原文本框
+        sp = shape._element
+        sp.getparent().remove(sp)
+        
+        # 创建拼音文本框（上半部分）
+        pinyin_box = self.presentation.slides[0].shapes.add_textbox(
+            left, top, width, height / 2 - Pt(2)
+        )
+        pinyin_tf = pinyin_box.text_frame
+        pinyin_tf.word_wrap = True
+        
+        # 生成拼音（去掉声调）
+        from pypinyin import pinyin as py_func, Style
+        import re
+        pinyin_text = ''
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                py = py_func(char, style=Style.TONE)[0][0]
+                py = re.sub(r'(\d)$', '', py)
+                pinyin_text += py + ' '
+            else:
+                if char.strip():
+                    pinyin_text += char
+        pinyin_text = pinyin_text.strip()
+        
+        p = pinyin_tf.paragraphs[0]
+        p.text = pinyin_text
+        p.font.size = Pt(font_size)
+        p.font.name = 'Arial'
+        p.alignment = PP_ALIGN.CENTER
+        
+        # 创建汉字文本框（下半部分）
+        char_box = self.presentation.slides[0].shapes.add_textbox(
+            left, top + height / 2 + Pt(2), width, height / 2 - Pt(2)
+        )
+        char_tf = char_box.text_frame
+        char_tf.word_wrap = True
+        
+        p2 = char_tf.paragraphs[0]
+        p2.text = text
+        p2.font.size = Pt(font_size)
+        p2.alignment = PP_ALIGN.CENTER
+        p2.space_before = Pt(0)
+        
+        # 返回拼音文本框供后续处理
+        return pinyin_box
+    
+    def _create_pinyin_inline(self, text_frame, text, font_size=24):
+        """内联方式：拼音在汉字上方，字号相同
+        
+        使用两个段落实现
         """
         text_frame.clear()
         
         from pypinyin import pinyin as py_func, Style
         import re
         
-        # 创建主段落
-        para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
-        
-        # 按字符处理，每个汉字+拼音作为一个单元
-        i = 0
-        while i < len(text):
-            char = text[i]
-            
-            if '\u4e00' <= char <= '\u9fff':  # 汉字
-                # 获取拼音
-                py = py_func(char, style=Style.TONE)[0][0]
-                py = re.sub(r'(\d)$', '', py)  # 去掉声调
-                
-                # 创建ruby元素：拼音在上，汉字在下
-                # 使用earlier方式：直接在汉字上方显示小号拼音
-                # 由于PPTX对ruby支持有限，我们用另一种方式：
-                # 在需要拼音的汉字前插入拼音，用特殊格式
-                
-                # 方法：创建一个包含拼音的特殊文本
-                # 格式：拼音(汉字) 或者 [拼音]汉字
-                
-                # 这里使用方案：拼音在汉字上方，用两行显示，拼音字号=汉字字号
-                # 但由于换行必须一起，我们用 inline 方式
-                
-                # 最简单的方案：拼音作为汉字的前缀，用空格分隔，但显示时在上面
-                # 由于技术限制，我们用 "拼音 汉字" 格式，但通过两次显示实现
-                
-                # 实际上，最佳方案是使用Ruby但PPTX支持有限
-                # 改用：拼音和汉字紧挨着，拼音在上方显示
-                
-                # 创建带拼音的文本：使用phonetic guide或者ruby
-                # 由于python-pptx限制，我们用简单方案：
-                # 显示为 "拼音" 在上行，"汉字" 在下行，字号相同
-                
-                # 换行必须一起，所以我们把每个汉字+拼音作为一个小单元
-                # 使用 line break 分隔
-                
-                # 实际上，最佳方式是使用 ruby element
-                try:
-                    # 尝试创建 ruby
-                    ruby = OxmlElement('a:ruby')
-                    ruby_bt = OxmlElement('a:rubyPr')
-                    ruby_bt.set('b', '0')  # baseline
-                    ruby_bt.set('h', '100000')  # height
-                    
-                    # 汉字
-                    rt = OxmlElement('a:rt')
-                    rt.set(qn('a:rubyFont'), 'Arial')
-                    rt.set('sz', str(int(font_size * 100)))  # 字号（百分之一磅）
-                    t_rt = OxmlElement('a:t')
-                    t_rt.text = py
-                    rt.append(t_rt)
-                    
-                    # 拼音
-                    bt = OxmlElement('a:bt')
-                    t_bt = OxmlElement('a:t')
-                    t_bt.text = char
-                    bt.append(t_bt)
-                    
-                    ruby.append(ruby_bt)
-                    ruby.append(rt)
-                    ruby.append(bt)
-                    
-                    # 添加到run
-                    r = para.add_run()
-                    r._r.append(ruby)
-                except:
-                    # 如果失败，使用简单方案
-                    r = para.add_run()
-                    r.text = f'{py} {char}'
-                
-            else:  # 非汉字
-                r = para.add_run()
-                r.text = char
-            
-            i += 1
-        
-        # 调整段落格式
-        para.alignment = PP_ALIGN.LEFT
-        para.font.size = Pt(font_size)
-    
-    def _create_pinyin_vertical(self, text_frame, text, font_size=24):
-        """创建拼音在汉字正上方等大的格式（垂直：每行拼音在上，汉字在下）"""
-        text_frame.clear()
-        
-        from pypinyin import pinyin as py_func, Style
-        import re
-        
-        # 按字符解析，每个汉字获取拼音
-        chars_with_pinyin = []
+        # 生成拼音
+        pinyin_list = []
         for char in text:
             if '\u4e00' <= char <= '\u9fff':
                 py = py_func(char, style=Style.TONE)[0][0]
                 py = re.sub(r'(\d)$', '', py)
-                chars_with_pinyin.append((py, char))
+                pinyin_list.append(py)
             else:
                 if char.strip():
-                    chars_with_pinyin.append(('', char))
+                    pinyin_list.append(char)
         
-        # 分行处理：每N个字符一行，保证拼音和汉字一起换行
-        # 简单处理：每个汉字+它的拼音作为一组，不拆分
-        lines = []
-        current_line = []
-        for py, char in chars_with_pinyin:
-            if py or char.strip():
-                current_line.append((py, char))
-                # 限制每行字符数，避免过长
-                if len(current_line) >= 8:
-                    lines.append(current_line)
-                    current_line = []
-        if current_line:
-            lines.append(current_line)
+        pinyin_text = ' '.join(pinyin_list)
         
-        # 第一行：拼音
-        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
-        pinyin_line = ' '.join([py for py, _ in line for py, char in [(py, char) if py else ('', char) for py, char in line] if py])
-        # 重新构建
-        pinyin_text = ' '.join([py for py, _ in chars_with_pinyin if py])
-        pinyin_para.text = pinyin_text
-        pinyin_para.font.size = Pt(font_size)  # 字号相同
-        pinyin_para.font.name = 'Arial'
+        # 第一段：拼音
+        p1 = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
+        p1.text = pinyin_text
+        p1.font.size = Pt(font_size)
+        p1.font.name = 'Arial'
+        p1.alignment = PP_ALIGN.CENTER
         
-        # 第二行：汉字
-        char_para = text_frame.add_paragraph()
-        char_text = ''.join([char for _, char in chars_with_pinyin if char.strip()])
-        char_para.text = char_text
-        char_para.font.size = Pt(font_size)  # 字号相同
-        char_para.space_before = Pt(2)
-    
-    def _create_pinyin_simple(self, text_frame, text, font_size=24):
-        """简单方案：拼音在汉字上方，字号相同，换行一起换"""
-        text_frame.clear()
-        
-        from pypinyin import pinyin as py_func, Style
-        import re
-        
-        # 解析文本
-        result = []
-        for char in text:
-            if '\u4e00' <= char <= '\u9fff':
-                py = py_func(char, style=Style.TONE)[0][0]
-                py = re.sub(r'(\d)$', '', py)
-                result.append((py, char))
-            else:
-                if char.strip():
-                    result.append(('', char))
-        
-        # 第一行：所有拼音
-        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
-        pinyin_text = ' '.join([py for py, _ in result if py])
-        pinyin_para.text = pinyin_text
-        pinyin_para.font.size = Pt(font_size)  # 字号相同
-        pinyin_para.font.name = 'Arial'
-        
-        # 第二行：所有汉字
-        char_para = text_frame.add_paragraph()
-        char_text = ''.join([char for _, char in result if char.strip()])
-        char_para.text = char_text
-        char_para.font.size = Pt(font_size)  # 字号相同
-        char_para.space_before = Pt(4)  # 间距
+        # 第二段：汉字
+        p2 = text_frame.add_paragraph()
+        p2.text = text
+        p2.font.size = Pt(font_size)
+        p2.alignment = PP_ALIGN.CENTER
+        p2.space_before = Pt(4)  # 两行之间的间距
     
     def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
-        """替换占位符并添加拼音（拼音在汉字上方，等大）"""
+        """替换占位符并添加拼音"""
         for shape in slide.shapes:
             if shape.has_text_frame:
                 for paragraph in shape.text_frame.paragraphs:
                     for run in paragraph.runs:
                         if placeholder_type in run.text:
+                            # 清除占位符
                             text_frame = shape.text_frame
-                            self._create_pinyin_simple(text_frame, content, font_size)
-                            return True
+                            
+                            # 查找包含该占位符的段落
+                            for p in text_frame.paragraphs:
+                                for r in p.runs:
+                                    if placeholder_type in r.text:
+                                        # 替换为实际内容
+                                        self._create_pinyin_inline(text_frame, content, font_size)
+                                        return True
         return False
     
     def _replace_placeholder_simple(self, slide, placeholder_type, content, font_size=24):
