@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-PPT生成器 - 双行对齐版本
-拼音在上，汉字在下，一一对应，字号一致，标准字体
+PPT生成器 - 表格对齐版本
+使用表格实现拼音-汉字精确对齐
 """
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.dml.color import RGBColor
+from pptx.oxml.ns import nsdecls
+from pptx.oxml import parse_xml
 import re
 from pypinyin import pinyin, Style
 
@@ -17,62 +19,169 @@ class PPTGenerator:
         self.md_content = md_content
         self.presentation = Presentation(template_path)
     
-    def _create_pinyin_text(self, text_frame, text, font_size=24):
-        """创建双行对齐的拼音+汉字文本
-        
-        第一行：拼音（每个拼音之间有空格）
-        第二行：汉字（一一对应）
-        字号完全相同
-        """
-        text_frame.clear()
-        
-        from pypinyin import pinyin as py_func, Style
-        import re
-        
-        # 解析文本，获取拼音和汉字列表
+    def _parse_pinyin_chars(self, text):
+        """解析文本，返回拼音和字符列表"""
         pinyin_list = []
         char_list = []
         
         for char in text:
             if '\u4e00' <= char <= '\u9fff':  # 汉字
-                py = py_func(char, style=Style.TONE)[0][0]
-                py = re.sub(r'(\d)$', '', py)  # 去掉声调
-                pinyin_list.append(py)
+                py = pinyin(char, style=Style.TONE)[0][0]
+                # 去掉声调数字
+                py_clean = re.sub(r'(\d)$', '', py)
+                pinyin_list.append(py_clean)
                 char_list.append(char)
-            else:
-                if char.strip():
-                    pinyin_list.append(char)
-                    char_list.append(char)
+            elif char.strip():  # 非空白字符
+                pinyin_list.append('')
+                char_list.append(char)
         
-        # 第一行：拼音
-        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
-        pinyin_text = ' '.join(pinyin_list)
-        pinyin_para.text = pinyin_text
-        pinyin_para.font.size = Pt(font_size)
-        pinyin_para.font.name = 'Arial'  # 标准字体
-        pinyin_para.alignment = PP_ALIGN.CENTER
-        
-        # 第二行：汉字
-        char_para = text_frame.add_paragraph()
-        char_text = ''.join(char_list)
-        char_para.text = char_text
-        char_para.font.size = Pt(font_size)  # 字号完全相同
-        char_para.font.name = 'Arial'  # 标准字体
-        char_para.alignment = PP_ALIGN.CENTER
-        char_para.space_before = Pt(6)  # 两行间距
+        return pinyin_list, char_list
     
-    def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
-        """替换占位符并添加双行对齐拼音"""
+    def _create_pinyin_table(self, slide, left, top, width, height, text, font_size=24):
+        """创建拼音-汉字对齐表格
+        
+        表格结构：
+        ┌─────┬─────┬─────┬─────┐
+        │ zhè │ shì │ bái │ sè  │  ← 拼音行
+        ├─────┼─────┼─────┼─────┤
+        │ 这  │ 是  │ 白  │ 色  │  ← 汉字行
+        └─────┴─────┴─────┴─────┘
+        
+        每个单元格包含一个拼音-汉字对，保证精确对齐
+        """
+        pinyin_list, char_list = self._parse_pinyin_chars(text)
+        
+        if not char_list:
+            return None
+        
+        num_chars = len(char_list)
+        
+        # 创建表格：2行 x N列
+        rows = 2
+        cols = num_chars
+        
+        # 使用幻灯片的尺寸单位（EMU）
+        table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+        table = table_shape.table
+        
+        # 设置列宽（均分）
+        col_width = width // cols
+        for col_idx in range(cols):
+            table.columns[col_idx].width = col_width
+        
+        # 设置行高
+        table.rows[0].height = height // 2  # 拼音行
+        table.rows[1].height = height // 2  # 汉字行
+        
+        # 填充表格
+        for col_idx, (py, char) in enumerate(zip(pinyin_list, char_list)):
+            # 拼音单元格（第0行）
+            pinyin_cell = table.cell(0, col_idx)
+            pinyin_cell.text = py
+            pinyin_para = pinyin_cell.text_frame.paragraphs[0]
+            pinyin_para.font.size = Pt(font_size)
+            pinyin_para.font.name = 'Arial'
+            pinyin_para.font.color.rgb = RGBColor(0, 0, 0)
+            pinyin_para.alignment = PP_ALIGN.CENTER
+            pinyin_cell.vertical_anchor = MSO_ANCHOR.BOTTOM
+            
+            # 汉字单元格（第1行）
+            char_cell = table.cell(1, col_idx)
+            char_cell.text = char
+            char_para = char_cell.text_frame.paragraphs[0]
+            char_para.font.size = Pt(font_size)
+            char_para.font.name = 'SimSun'
+            char_para.font.color.rgb = RGBColor(0, 0, 0)
+            char_para.alignment = PP_ALIGN.CENTER
+            char_cell.vertical_anchor = MSO_ANCHOR.TOP
+        
+        # 隐藏表格边框
+        self._hide_table_borders(table)
+        
+        return table_shape
+    
+    def _hide_table_borders(self, table):
+        """隐藏表格边框"""
+        tbl = table._tbl
+        
+        # 设置表格样式为无框线
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = parse_xml(r'<a:tblPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>')
+            tbl.insert(0, tblPr)
+        
+        # 遍历所有单元格，移除边框
+        for row in table.rows:
+            for cell in row.cells:
+                tcPr = cell._tc.get_or_add_tcPr()
+                # 设置边框为无
+                lnL = parse_xml(r'<a:lnL w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnL>')
+                lnR = parse_xml(r'<a:lnR w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnR>')
+                lnT = parse_xml(r'<a:lnT w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnT>')
+                lnB = parse_xml(r'<a:lnB w="0" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:lnB>')
+                
+                # 尝试添加边框设置
+                try:
+                    tcPr.append(lnL)
+                    tcPr.append(lnR)
+                    tcPr.append(lnT)
+                    tcPr.append(lnB)
+                except:
+                    pass
+    
+    def _replace_placeholder_with_pinyin_table(self, slide, placeholder_type, content, font_size=24):
+        """替换占位符为拼音-汉字表格"""
         for shape in slide.shapes:
             if shape.has_text_frame:
-                text_frame = shape.text_frame
-                
-                for para in text_frame.paragraphs:
-                    for run in para.runs:
-                        if placeholder_type in run.text:
-                            self._create_pinyin_text(text_frame, content, font_size)
-                            return True
+                text = shape.text_frame.text
+                if placeholder_type in text:
+                    # 获取shape的位置和大小
+                    left = shape.left
+                    top = shape.top
+                    width = shape.width
+                    height = shape.height
+                    
+                    # 创建拼音表格
+                    table_shape = self._create_pinyin_table(slide, left, top, width, height, content, font_size)
+                    
+                    if table_shape:
+                        # 隐藏原始shape（移除文本）
+                        shape.text_frame.clear()
+                        # 将原始shape移到不可见位置
+                        shape.left = Emu(0)
+                        shape.top = Emu(0)
+                        shape.width = Emu(0)
+                        shape.height = Emu(0)
+                    
+                    return True
         return False
+    
+    def _create_pinyin_text(self, text_frame, text, font_size=24):
+        """创建双行对齐的拼音+汉字文本（备用方案，用于无表格情况）"""
+        text_frame.clear()
+        
+        pinyin_list, char_list = self._parse_pinyin_chars(text)
+        
+        # 拼音行
+        pinyin_text = ' '.join(pinyin_list)
+        char_text = ''.join(char_list)
+        
+        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
+        pinyin_para.text = pinyin_text
+        pinyin_para.font.size = Pt(font_size)
+        pinyin_para.font.name = 'Arial'
+        pinyin_para.alignment = PP_ALIGN.CENTER
+        
+        char_para = text_frame.add_paragraph()
+        char_para.text = char_text
+        char_para.font.size = Pt(font_size)
+        char_para.font.name = 'SimSun'
+        char_para.alignment = PP_ALIGN.CENTER
+        char_para.space_before = Pt(4)
+    
+    def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
+        """替换占位符并添加拼音-汉字对齐（优先使用表格）"""
+        return self._replace_placeholder_with_pinyin_table(slide, placeholder_type, content, font_size)
     
     def _replace_placeholder_simple(self, slide, placeholder_type, content, font_size=24):
         """简单替换占位符"""
