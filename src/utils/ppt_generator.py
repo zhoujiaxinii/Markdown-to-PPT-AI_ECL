@@ -42,6 +42,7 @@ class PPTGenerator:
         
         字符间距：拼音之间1个字母距离，汉字跟随拼音
         无边框、无底色
+        自动缩放字号以适应宽度
         """
         pinyin_list, char_list = self._parse_pinyin_chars(text)
         
@@ -52,40 +53,52 @@ class PPTGenerator:
         rows = 2
         cols = num_chars
         
-        # 计算每个字符的实际宽度（根据拼音长度）
         # 字号对应的EMU单位：Pt -> Inches -> EMU
         # 1 Pt = 1/72 Inch, 1 Inch = 914400 EMU
         pt_to_emu = lambda pt: int(pt * 914400 / 72)
         
-        # 计算每个列的宽度：拼音长度 + 1个字母间距
+        # 计算所需的表格宽度（根据拼音长度）
+        def calc_total_width(fs):
+            letter_width = pt_to_emu(fs * 0.5)
+            total = 0
+            for py in pinyin_list:
+                py_len = len(py) if py else 1
+                col_width = pt_to_emu(fs * 0.6) * py_len + letter_width
+                total += col_width
+            return total
+        
+        # 计算所需宽度
+        total_width = calc_total_width(font_size)
+        
+        # 如果超出可用宽度，自动缩小字号
+        actual_font_size = font_size
+        min_font_size = 10  # 最小字号
+        
+        if total_width > width:
+            # 按比例计算需要的字号
+            scale = width / total_width
+            actual_font_size = max(int(font_size * scale), min_font_size)
+            # 重新计算宽度
+            total_width = calc_total_width(actual_font_size)
+        
+        # 计算每个列的宽度
         col_widths = []
-        letter_width_emu = pt_to_emu(font_size * 0.5)  # 一个字母约等于0.5个字号宽度
+        letter_width_emu = pt_to_emu(actual_font_size * 0.5)
         
         for py in pinyin_list:
-            # 拼音长度（没有拼音的取1）
             py_len = len(py) if py else 1
-            # 列宽 = 拼音宽度 + 1个字母间距
-            col_width = pt_to_emu(font_size * 0.6) * py_len + letter_width_emu
+            col_width = pt_to_emu(actual_font_size * 0.6) * py_len + letter_width_emu
             col_widths.append(col_width)
         
-        # 计算表格总宽度
-        total_width = sum(col_widths)
-        
-        # 如果计算宽度超过可用宽度，按比例缩放
-        if total_width > width:
-            scale = width / total_width
-            col_widths = [int(w * scale) for w in col_widths]
-            total_width = sum(col_widths)
-        
         # 创建表格
-        table_shape = slide.shapes.add_table(rows, cols, left, top, total_width, height)
+        table_shape = slide.shapes.add_table(rows, cols, left, top, int(total_width), height)
         table = table_shape.table
         
         # 设置列宽
         for col_idx, col_width in enumerate(col_widths):
-            table.columns[col_idx].width = col_width
+            table.columns[col_idx].width = int(col_width)
         
-        # 设置行高（拼音行稍小，汉字行稍大）
+        # 设置行高
         pinyin_height = int(height * 0.45)
         char_height = int(height * 0.55)
         table.rows[0].height = pinyin_height
@@ -96,8 +109,10 @@ class PPTGenerator:
             # 拼音单元格
             pinyin_cell = table.cell(0, col_idx)
             pinyin_cell.text = py
+            # 禁止换行
+            pinyin_cell.text_frame.word_wrap = False
             pinyin_para = pinyin_cell.text_frame.paragraphs[0]
-            pinyin_para.font.size = Pt(font_size)
+            pinyin_para.font.size = Pt(actual_font_size)
             pinyin_para.font.name = 'Arial'
             pinyin_para.font.color.rgb = RGBColor(0, 0, 0)
             pinyin_para.alignment = PP_ALIGN.CENTER
@@ -106,8 +121,10 @@ class PPTGenerator:
             # 汉字单元格
             char_cell = table.cell(1, col_idx)
             char_cell.text = char
+            # 禁止换行
+            char_cell.text_frame.word_wrap = False
             char_para = char_cell.text_frame.paragraphs[0]
-            char_para.font.size = Pt(font_size)
+            char_para.font.size = Pt(actual_font_size)
             char_para.font.name = 'SimSun'
             char_para.font.color.rgb = RGBColor(0, 0, 0)
             char_para.alignment = PP_ALIGN.CENTER
