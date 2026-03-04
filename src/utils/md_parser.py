@@ -50,7 +50,8 @@ class MDParser:
                     parsed_content = self._parse_content(current_content)
                     result['h2'].append(self._create_h2_item(current_h2, parsed_content))
                     current_content = []
-                elif current_h1 and not result['h1']:
+                # 保存当前的章节名
+                if current_h1:
                     result['h1'].append(current_h1)
                 current_h1 = line[3:].strip()
                 current_h2 = None

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 PPT生成器
-支持：1-4文本框、0-5图片、音视频模板匹配、拼音标注
+支持：1-4文本框、0-5图片、音视频模板匹配、拼音标注（汉字正上方）
 """
 
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt, Emu
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.dml.color import RGBColor
+from pptx.oxml.xmlchemy import OxmlElement
 import re
 from pypinyin import pinyin, Style
 
@@ -17,44 +18,93 @@ class PPTGenerator:
         self.md_content = md_content
         self.presentation = Presentation(template_path)
     
-    def _add_pinyin(self, text, font_size=24):
-        """为汉字添加拼音，拼音显示在汉字上方，拼音字号=汉字字号"""
-        result = []
-        for char in text:
-            if '\u4e00' <= char <= '\u9fff':  # 判断是否为汉字
-                py = pinyin(char, style=Style.TONE)[0][0]
-                # 拼音在汉字上方，用斜杠分隔
-                result.append(f'{py}/{char}')
-            else:
-                result.append(char)
-        return ''.join(result)
+    def _add_ruby(self, run, ruby_text):
+        """为汉字添加拼音ruby（注音）"""
+        # 创建 ruby 元素
+        ruby = OxmlElement('a:ruby')
+        ruby_bt = OxmlElement('a:ruby')
+        
+        # 汉字文本
+        t = OxmlElement('a:t')
+        t.text = run.text
+        ruby_bt.append(t)
+        
+        # 拼音文本
+        rt = OxmlElement('a:rt')
+        rt.text = ruby_text
+        rt.set('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rsidR', '00A12345')
+        
+        ruby.append(ruby_bt)
+        ruby.append(rt)
+        
+        return ruby
     
-    def _add_pinyin_rich(self, text_frame, font_size=24):
-        """为文本框中的文字添加拼音（富文本方式）"""
-        # 清除现有内容
+    def _create_text_with_pinyin(self, text_frame, text, font_size=24):
+        """在文本框中创建拼音在汉字正上方的格式
+        
+        使用两行布局：上行拼音，下行汉字
+        """
         text_frame.clear()
         
-        # 创建拼音和汉字组合
-        for char in text_frame.add_paragraph():
-            if '\u4e00' <= char <= '\u9fff':
-                # 是汉字，添加拼音
-                py = pinyin(char, style=Style.TONE)[0][0]
-                # 拼音在上的格式：拼音(小字)在汉字上面
-                # 这里简化处理：用特殊格式标记，后续可优化
-                run = text_frame.add_run()
-                run.text = f'{py} '  # 拼音
-                run.font.size = Pt(font_size // 2)  # 拼音字号小一半
-                
-                run2 = text_frame.add_run()
-                run2.text = char  # 汉字
-                run2.font.size = Pt(font_size)
-            else:
-                run = text_frame.add_run()
-                run.text = char
-                run.font.size = Pt(font_size)
+        # 解析文本，分离汉字和拼音
+        from pypinyin import pinyin as py_func, Style
+        import re
+        
+        # 先将文本按字符分解，处理汉字
+        pinyin_list = []
+        char_list = []
+        
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':  # 汉字
+                py = py_func(char, style=Style.TONE)[0][0]
+                py = re.sub(r'(\d)$', '', py)  # 去掉声调
+                pinyin_list.append(py)
+                char_list.append(char)
+            else:  # 非汉字
+                if char.strip():  # 忽略空白
+                    pinyin_list.append('')
+                    char_list.append(char)
+        
+        # 第一行：拼音（字号小）
+        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
+        pinyin_para.text = ' '.join([p for p in pinyin_list if p])
+        pinyin_para.font.size = Pt(font_size * 0.5)  # 拼音字号是汉字的一半
+        pinyin_para.font.name = 'Arial'
+        pinyin_para.alignment = PP_ALIGN.CENTER
+        
+        # 第二行：汉字（字号正常）
+        char_para = text_frame.add_paragraph()
+        char_para.text = ''.join(char_list)
+        char_para.font.size = Pt(font_size)
+        char_para.alignment = PP_ALIGN.CENTER
+        char_para.space_before = Pt(2)
     
-    def _find_placeholder(self, slide, placeholder_type):
-        """查找指定类型的占位符"""
+    def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
+        """替换占位符并添加拼音（拼音在汉字上方）"""
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        if placeholder_type in run.text:
+                            # 清除原有内容
+                            text_frame = shape.text_frame
+                            self._create_text_with_pinyin(text_frame, content, font_size)
+                            return True
+        return False
+    
+    def _replace_placeholder_simple(self, slide, placeholder_type, content, font_size=24):
+        """简单替换占位符（不带拼音，用于某些特殊占位符）"""
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        if placeholder_type in run.text:
+                            run.text = content
+                            return True
+        return False
+    
+    def _find_placeholder_shape(self, slide, placeholder_type):
+        """查找包含指定占位符的shape"""
         for shape in slide.shapes:
             if shape.has_text_frame:
                 for paragraph in shape.text_frame.paragraphs:
@@ -69,25 +119,11 @@ class PPTGenerator:
         for shape in slide.shapes:
             if shape.has_text_frame:
                 text = shape.text_frame.text
-                # 查找所有 {{xxx}} 格式的占位符
                 matches = re.findall(r'\{\{(\w+)\}\}', text)
                 for match in matches:
                     if match not in placeholders:
                         placeholders[match] = shape
         return placeholders
-    
-    def _replace_placeholder(self, slide, placeholder_type, content):
-        """替换占位符内容"""
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for paragraph in shape.text_frame.paragraphs:
-                    for run in paragraph.runs:
-                        if placeholder_type in run.text:
-                            # 替换文本，添加拼音
-                            pinyin_text = self._add_pinyin(content, font_size=24)
-                            run.text = pinyin_text
-                            return True
-        return False
     
     def _get_text_box_count(self, h2_item):
         """获取该小节需要几个文本框"""
@@ -104,42 +140,31 @@ class PPTGenerator:
         # 1. 封面页
         cover_slide = None
         for slide in self.presentation.slides:
-            if self._find_placeholder(slide, 'h0_0'):
+            if self._find_placeholder_shape(slide, 'h0_0'):
                 cover_slide = slide
                 break
         if cover_slide:
             matched_slides.append(('cover', cover_slide))
         
-        # 2. 目录页
-        toc_slide = None
-        for slide in self.presentation.slides:
-            if self._find_placeholder(slide, 'h1_0') and slide != cover_slide:
-                toc_slide = slide
-                break
-        if toc_slide:
-            matched_slides.append(('toc', toc_slide))
-        
-        # 3. 分类模板页
-        section_slides = []  # 章节页
-        content_slides = []  # 正文页（普通）
-        audio_slides = []    # 音频页（带喇叭）
-        video_slides = []    # 视频页
+        # 2. 分类模板页
+        section_slides = []  # 章节页 (h1_0)
+        content_slides = []  # 正文页 (h2_0)
         
         for slide in self.presentation.slides:
-            if slide == cover_slide or slide == toc_slide:
+            if slide == cover_slide:
                 continue
             placeholders = self._find_all_placeholders(slide)
-            # 判断模板类型
-            if 'audio_0' in placeholders:
-                audio_slides.append(slide)
-            elif 'video_0' in placeholders:
-                video_slides.append(slide)
-            elif 'h1_0' in placeholders and 'h2_0' not in placeholders:
+            if 'h1_0' in placeholders and 'h2_0' not in placeholders:
                 section_slides.append(slide)
             elif 'h2_0' in placeholders:
                 content_slides.append(slide)
         
-        # 4. 章节页匹配
+        # 3. 添加目录页（第一个章节前）
+        if content_slides:
+            toc_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
+            matched_slides.append(('toc', toc_slide))
+        
+        # 4. 添加章节页
         for i, h1 in enumerate(self.md_content['h1']):
             if i < len(section_slides):
                 matched_slides.append(('section', section_slides[i]))
@@ -147,36 +172,27 @@ class PPTGenerator:
                 if section_slides:
                     new_slide = self.presentation.slides.add_slide(section_slides[0].slide_layout)
                     matched_slides.append(('section', new_slide))
+                elif content_slides:
+                    new_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
+                    matched_slides.append(('section', new_slide))
         
-        # 5. 正文页匹配（包含音视频）
+        # 5. 添加正文页
         for h2 in self.md_content['h2']:
             text_count = self._get_text_box_count(h2)
             image_count = self._get_image_count(h2)
             
-            # 判断页面类型
             if h2.get('video'):
-                # 视频单独一页
-                if video_slides:
-                    matched_slides.append(('video', video_slides[0]))
-                else:
-                    # 没有视频模板，复制普通模板
-                    if content_slides:
-                        new_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
-                        matched_slides.append(('video', new_slide))
+                if content_slides:
+                    new_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
+                    matched_slides.append(('video', new_slide))
             elif h2.get('audio'):
-                # 音频+文本
-                if audio_slides:
-                    matched_slides.append(('audio', audio_slides[0]))
-                else:
-                    if content_slides:
-                        new_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
-                        matched_slides.append(('audio', new_slide))
+                if content_slides:
+                    new_slide = self.presentation.slides.add_slide(content_slides[0].slide_layout)
+                    matched_slides.append(('audio', new_slide))
             else:
-                # 普通正文页
                 if content_slides:
                     matched_slides.append(('content', content_slides[0]))
                 else:
-                    # 复制封面页作为后备
                     if cover_slide:
                         new_slide = self.presentation.slides.add_slide(cover_slide.slide_layout)
                         matched_slides.append(('content', new_slide))
@@ -202,54 +218,59 @@ class PPTGenerator:
         if self.md_content['h0'] and len(self.presentation.slides) > 0:
             cover_slide = self.presentation.slides[0]
             title = self.md_content['h0'][0]
-            self._replace_placeholder(cover_slide, 'h0_0', title)
+            self._replace_placeholder_with_pinyin(cover_slide, 'h0_0', title, font_size=36)
         
         # 2. 目录页
-        if len(self.presentation.slides) > 1:
+        if len(self.presentation.slides) > 1 and self.md_content['h1']:
             toc_slide = self.presentation.slides[1]
+            # 填充目录内容
             for i, h1 in enumerate(self.md_content['h1']):
-                placeholder = f'h1_{i}'
-                self._replace_placeholder(toc_slide, placeholder, h1)
+                if i == 0:
+                    self._replace_placeholder_with_pinyin(toc_slide, 'h2_0', h1, font_size=24)
+                else:
+                    placeholder = f'h3_{i-1}' if i <= 4 else None
+                    if placeholder:
+                        self._replace_placeholder_with_pinyin(toc_slide, placeholder, h1, font_size=18)
         
         # 3. 正文页内容
         slide_idx = 2
-        h2_index = 0
+        section_count = len(self.md_content['h1'])
         
         # 处理章节页
-        for i, h1 in enumerate(self.md_content['h1']):
+        for i in range(section_count):
             if slide_idx < len(self.presentation.slides):
                 section_slide = self.presentation.slides[slide_idx]
-                self._replace_placeholder(section_slide, 'h1_0', h1)
+                self._replace_placeholder_with_pinyin(section_slide, 'h1_0', self.md_content['h1'][i], font_size=32)
                 slide_idx += 1
         
-        # 处理正文页（包括音视频）
+        # 处理正文页
+        h2_index = 0
         while h2_index < len(self.md_content['h2']) and slide_idx < len(self.presentation.slides):
             h2 = self.md_content['h2'][h2_index]
             content_slide = self.presentation.slides[slide_idx]
             
-            # 替换小节名
-            self._replace_placeholder(content_slide, 'h2_0', h2['title'])
+            # 替换小节名（带拼音，汉字上方）
+            self._replace_placeholder_with_pinyin(content_slide, 'h2_0', h2['title'], font_size=28)
             
             # 替换文本框内容 (h3_0 ~ h3_3)
             for j, text in enumerate(h2.get('content', [])):
-                if j <= 3:  # 最多4个文本框
+                if j <= 3:
                     placeholder = f'h3_{j}'
-                    self._replace_placeholder(content_slide, placeholder, text)
+                    self._replace_placeholder_with_pinyin(content_slide, placeholder, text, font_size=20)
             
-            # 替换图片 (img_0 ~ img_4)
+            # 替换图片占位符
             for j, img_url in enumerate(h2.get('images', [])):
-                if j <= 4:  # 最多5张图片
+                if j <= 4:
                     placeholder = f'img_{j}'
-                    # TODO: 下载图片并插入PPT
-                    # 目前先跳过，后续完善
+                    self._replace_placeholder_simple(content_slide, placeholder, f'[图片{j+1}]')
             
             # 替换音频
             if h2.get('audio'):
-                self._replace_placeholder(content_slide, 'audio_0', h2['audio'])
+                self._replace_placeholder_simple(content_slide, 'audio_0', '[音频播放]')
             
             # 替换视频
             if h2.get('video'):
-                self._replace_placeholder(content_slide, 'video_0', h2['video'])
+                self._replace_placeholder_simple(content_slide, 'video_0', '[视频播放]')
             
             slide_idx += 1
             h2_index += 1
