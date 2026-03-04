@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-PPT生成器 - 混合格式版本
-保留文本显示，同时添加ruby拼音
+PPT生成器 - 双行对齐版本
+拼音在上，汉字在下，一一对应，字号一致，标准字体
 """
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.dml.color import RGBColor
-from pptx.oxml.xmlchemy import OxmlElement
-from pptx.oxml.ns import qn
 import re
 from pypinyin import pinyin, Style
 
@@ -19,64 +17,52 @@ class PPTGenerator:
         self.md_content = md_content
         self.presentation = Presentation(template_path)
     
-    def _create_text_with_ruby(self, text_frame, text, font_size=24):
-        """创建带Ruby拼音的文本，同时保留可见文本"""
+    def _create_pinyin_text(self, text_frame, text, font_size=24):
+        """创建双行对齐的拼音+汉字文本
+        
+        第一行：拼音（每个拼音之间有空格）
+        第二行：汉字（一一对应）
+        字号完全相同
+        """
         text_frame.clear()
         
         from pypinyin import pinyin as py_func, Style
         import re
         
-        # 创建段落
-        if not text_frame.paragraphs:
-            text_frame.add_paragraph()
-        para = text_frame.paragraphs[0]
-        para.font.size = Pt(font_size)
+        # 解析文本，获取拼音和汉字列表
+        pinyin_list = []
+        char_list = []
         
-        # 遍历每个字符
         for char in text:
             if '\u4e00' <= char <= '\u9fff':  # 汉字
-                # 获取拼音
                 py = py_func(char, style=Style.TONE)[0][0]
                 py = re.sub(r'(\d)$', '', py)  # 去掉声调
-                
-                # 创建run - 先显示拼音+汉字的普通文本
-                run = para.add_run()
-                run.text = f'{py} {char}'  # 显示 "拼音 汉字" 格式
-                run.font.size = Pt(font_size)
-                
-                # 同时添加ruby元素（用于精确显示）
-                try:
-                    ruby = OxmlElement('a:ruby')
-                    
-                    rubyPr = OxmlElement('a:rubyPr')
-                    rubyPr.set(qn('a:rubyFont'), 'Arial')
-                    rubyPr.set('sz', str(int(font_size * 100)))
-                    
-                    bt = OxmlElement('a:bt')
-                    t_bt = OxmlElement('a:t')
-                    t_bt.text = char
-                    bt.append(t_bt)
-                    
-                    rt = OxmlElement('a:rt')
-                    t_rt = OxmlElement('a:t')
-                    t_rt.text = py
-                    rt.append(t_rt)
-                    
-                    ruby.append(rubyPr)
-                    ruby.append(bt)
-                    ruby.append(rt)
-                    
-                    run._r.append(ruby)
-                except:
-                    pass
-                
-            else:  # 非汉字
-                run = para.add_run()
-                run.text = char
-                run.font.size = Pt(font_size)
+                pinyin_list.append(py)
+                char_list.append(char)
+            else:
+                if char.strip():
+                    pinyin_list.append(char)
+                    char_list.append(char)
+        
+        # 第一行：拼音
+        pinyin_para = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
+        pinyin_text = ' '.join(pinyin_list)
+        pinyin_para.text = pinyin_text
+        pinyin_para.font.size = Pt(font_size)
+        pinyin_para.font.name = 'Arial'  # 标准字体
+        pinyin_para.alignment = PP_ALIGN.CENTER
+        
+        # 第二行：汉字
+        char_para = text_frame.add_paragraph()
+        char_text = ''.join(char_list)
+        char_para.text = char_text
+        char_para.font.size = Pt(font_size)  # 字号完全相同
+        char_para.font.name = 'Arial'  # 标准字体
+        char_para.alignment = PP_ALIGN.CENTER
+        char_para.space_before = Pt(6)  # 两行间距
     
     def _replace_placeholder_with_pinyin(self, slide, placeholder_type, content, font_size=24):
-        """替换占位符并添加拼音"""
+        """替换占位符并添加双行对齐拼音"""
         for shape in slide.shapes:
             if shape.has_text_frame:
                 text_frame = shape.text_frame
@@ -84,7 +70,7 @@ class PPTGenerator:
                 for para in text_frame.paragraphs:
                     for run in para.runs:
                         if placeholder_type in run.text:
-                            self._create_text_with_ruby(text_frame, content, font_size)
+                            self._create_pinyin_text(text_frame, content, font_size)
                             return True
         return False
     
