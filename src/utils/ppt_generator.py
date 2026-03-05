@@ -603,12 +603,21 @@ class PPTGenerator:
                 cur_sec = sec
                 pages.append(('section', self.templates['section'], sec))
 
+            # 基础文本框数量
             text_count = len(h2.get('content', []))
+            # 如果有音频/视频，需要额外文本框来显示标记
+            if h2.get('audio'):
+                text_count += 1
+            if h2.get('video'):
+                text_count += 1
+            
             img_count = len(h2.get('images', []))
             idx = next_content(text_count, img_count)
             if idx is not None:
                 pages.append(('content', idx, h2))
-                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片) → 模板页{idx+1}")
+                audio_mark = " 🔊" if h2.get('audio') else ""
+                video_mark = " 🎬" if h2.get('video') else ""
+                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{audio_mark}{video_mark}) → 模板页{idx+1}")
             else:
                 print(f"  ⚠️ 无法匹配: {h2['title']} ({text_count}文本框, {img_count}图片)")
 
