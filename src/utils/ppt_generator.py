@@ -137,12 +137,36 @@ class PPTGenerator:
         return tbl_shape
 
     def _hide_borders(self, tbl):
+        """彻底隐藏表格边框和背景，实现真正透明"""
         ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+        # 1. 移除内置表格样式（这是白色底色的根源）
+        tblPr = tbl._tbl.tblPr
+        if tblPr is not None:
+            for style_id in tblPr.findall(f'{{{ns_a}}}tableStyleId'):
+                tblPr.remove(style_id)
+            tblPr.set('firstRow', '0')
+            tblPr.set('bandRow', '0')
+            tblPr.set('firstCol', '0')
+            tblPr.set('lastRow', '0')
+            tblPr.set('lastCol', '0')
+
+        # 2. 每个单元格：四边框 noFill + 单元格背景 noFill
         for row in tbl.rows:
             for cell in row.cells:
                 tcPr = cell._tc.get_or_add_tcPr()
+                # 清除已有的边框和填充
                 for ch in list(tcPr):
-                    if 'ln' in ch.tag or 'solidFill' in ch.tag: tcPr.remove(ch)
+                    tag = ch.tag.split('}')[-1] if '}' in ch.tag else ch.tag
+                    if tag in ('lnL','lnR','lnT','lnB','solidFill','noFill'):
+                        tcPr.remove(ch)
+                # 显式设置四边框为无
+                for border in ('lnL', 'lnR', 'lnT', 'lnB'):
+                    ln = etree.SubElement(tcPr, f'{{{ns_a}}}{border}')
+                    ln.set('w', '0')
+                    ln.set('cap', 'flat')
+                    etree.SubElement(ln, f'{{{ns_a}}}noFill')
+                # 单元格背景透明
                 etree.SubElement(tcPr, f'{{{ns_a}}}noFill')
 
     # ── 占位符操作 ────────────────────────────────────────
