@@ -530,20 +530,39 @@ class PPTGenerator:
         elif typ == 'content':
             used = ['h2_0']
             self._fill(slide, 'h2_0', data['title'], 28)
-            for j, t in enumerate(data.get('content', [])):
+            
+            # 获取原始文本内容
+            content_list = data.get('content', [])
+            
+            # 添加音频标记（作为额外文本框）
+            audio = data.get('audio')
+            video = data.get('video')
+            
+            # 音频标记
+            if audio:
+                audio_mark = f"[🔊 点击播放: {os.path.basename(audio)}]"
+                content_list = list(content_list) + [audio_mark]
+            
+            # 视频标记
+            if video:
+                video_mark = f"[🎬 点击播放: {os.path.basename(video)}]"
+                content_list = list(content_list) + [video_mark]
+            
+            # 填充所有文本框（包括音频/视频标记）
+            for j, t in enumerate(content_list):
                 self._fill(slide, f'h3_{j}', t, 20); used.append(f'h3_{j}')
             self._clear_unused(slide, used)
+            
             # 替换图片
             images = data.get('images', [])
             if images:
                 self._replace_images_on_slide(slide, images)
             n_img = len(images)
-            # 嵌入音频
-            audio = data.get('audio')
-            if audio:
-                self._embed_audio_on_slide(slide, audio)
-            audio_info = f", 🔊{os.path.basename(audio)}" if audio else ""
-            print(f"  {num}. 正文: {data['title']} ({len(data.get('content',[]))}文本框, {n_img}图片{audio_info})")
+            
+            # 统计信息
+            audio_info = f" 🔊{os.path.basename(audio)}" if audio else ""
+            video_info = f" 🎬{os.path.basename(video)}" if video else ""
+            print(f"  {num}. 正文: {data['title']} ({len(content_list)}文本框, {n_img}图片{audio_info}{video_info})")
         elif typ == 'end':
             print(f"  {num}. 结束页")
 
