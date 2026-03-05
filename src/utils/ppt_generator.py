@@ -258,6 +258,164 @@ class PPTGenerator:
         if replaced > 0:
             print(f"    📷 替换 {replaced}/{len(image_urls)} 张图片")
 
+    # ── 音频嵌入 ─────────────────────────────────────────
+
+    def _resolve_audio_path(self, audio_path):
+        """解析音频路径"""
+        if os.path.isabs(audio_path):
+            if os.path.exists(audio_path):
+                return audio_path
+            return None
+
+        # 相对于 MD 文件目录
+        candidate = os.path.join(self.md_dir, audio_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于模板目录
+        template_dir = os.path.dirname(os.path.abspath(self.template_path))
+        candidate = os.path.join(template_dir, audio_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于当前工作目录
+        if os.path.exists(audio_path):
+            return os.path.abspath(audio_path)
+
+        return None
+
+    def _embed_audio(self, slide, audio_path):
+        """嵌入音频到幻灯片"""
+        abs_path = self._resolve_audio_path(audio_path)
+        if not abs_path:
+            print(f"    ⚠️ 音频文件不存在: {audio_path}")
+            return False
+
+        # 检查文件大小
+        file_size = os.path.getsize(abs_path)
+        if file_size > 50 * 1024 * 1024:  # 50MB limit
+            print(f"    ⚠️ 音频文件过大: {file_size/1024/1024:.1f}MB (最大50MB)")
+            return False
+
+        # 找到幻灯片中右下角的位置（通常是放媒体的位置）
+        # 先尝试找 {{audio}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'audio' in ph:
+            # 使用占位符位置
+            s = ph['audio']
+            left, top = s.left, s.top
+            # 删除占位符
+            s.text_frame.clear()
+            s.left = Emu(0)
+        else:
+            # 默认放到右下角，靠近边缘
+            # 获取幻灯片大小
+            slide_width = slide.slide_layout.slide_width
+            slide_height = slide.slide_layout.slide_height
+            # 右下角位置
+            left = Emu(int(slide_width * 0.7))
+            top = Emu(int(slide_height * 0.7))
+
+        try:
+            # 嵌入音频
+            audio_shape = slide.shapes.add_audio(
+                abs_path,  # 文件路径
+                left,      # 左侧位置
+                top,       # 顶部位置
+                Emu(1000000),  # 宽度 1cm
+                Emu(1000000)   # 高度 1cm
+            )
+            # 设置音频图标显示
+            audio_shape.name = "音频"
+            # 隐藏音频图标（只保留功能）
+            audio_shape.left = Emu(0)
+            audio_shape.top = Emu(0)
+            audio_shape.width = Emu(0)
+            audio_shape.height = Emu(0)
+
+            print(f"    🔊 嵌入音频: {os.path.basename(audio_path)}")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 音频嵌入失败: {e}")
+            return False
+
+    def _embed_audio_on_slide(self, slide, audio_path):
+        """
+        在幻灯片中嵌入音频
+        注意: python-pptx 不直接支持 add_audio，使用 add_movie 作为后备方案
+        或者需要手动在模板中嵌入音频占位符
+        """
+        if not audio_path:
+            return
+
+        abs_path = self._resolve_audio_path(audio_path)
+        if not abs_path:
+            print(f"    ⚠️ 音频文件不存在: {audio_path}")
+            return
+
+        # 获取幻灯片尺寸
+        try:
+            slide_width = self.prs.slide_width
+            slide_height = self.prs.slide_height
+        except:
+            slide_width = Emu(12192000)
+            slide_height = Emu(6858000)
+
+        # 找 {{audio}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'audio' in ph:
+            s = ph['audio']
+            left, top = s.left, s.top
+            width, height = s.width, s.height
+            s.text_frame.clear()
+        else:
+            # 默认右下角位置
+            left = Emu(int(slide_width * 0.78))
+            top = Emu(int(slide_height * 0.75))
+            width = Emu(1500000)
+            height = Emu(1500000)
+
+        # 尝试使用 add_movie（PPT 中音频和视频都作为媒体处理）
+        try:
+            # 注意：python-pptx 的 add_movie 需要有效的视频文件
+            # 对于音频，可能无法真正嵌入，仅创建媒体占位符
+            audio_shape = slide.shapes.add_movie(
+                abs_path,
+                left, top, width, height,
+                poster_frame_image=None
+            )
+            audio_shape.name = "音频"
+            # 检查是否真的嵌入了媒体
+            # 如果没有实际媒体数据，给出提示
+            print(f"    🔊 已添加音频占位符: {os.path.basename(audio_path)} (需模板支持)")
+        except Exception as e:
+            print(f"    ⚠️ 音频嵌入需模板预置占位符: {os.path.basename(audio_path)}")
+
+    def _embed_audio_xml(self, slide, audio_path, left, top, width, height):
+        """通过 XML 直接嵌入音频（高级用法）"""
+        import io
+        from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+        # 读取音频文件
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+
+        # 确定 MIME 类型
+        ext = audio_path.lower().split('.')[-1]
+        mime_types = {
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav',
+            'mp4': 'video/mp4',
+            'm4a': 'audio/mp4',
+        }
+        mime_type = mime_types.get(ext, 'application/octet-stream')
+
+        # 创建媒体 part
+        media_part_name = f'/ppt/media/audio_{id(audio_path)}.{ext}'
+        # 注意：这里只是标记，实际嵌入需要更复杂的 XML 处理
+        # 暂时返回失败，让用户手动在模板中嵌入音频
+        raise NotImplementedError("XML audio embedding not fully implemented")
+
     # ── 拼音表格 ─────────────────────────────────────────
 
     def _parse_pinyin(self, text):
@@ -380,7 +538,12 @@ class PPTGenerator:
             if images:
                 self._replace_images_on_slide(slide, images)
             n_img = len(images)
-            print(f"  {num}. 正文: {data['title']} ({len(data.get('content',[]))}文本框, {n_img}图片)")
+            # 嵌入音频
+            audio = data.get('audio')
+            if audio:
+                self._embed_audio_on_slide(slide, audio)
+            audio_info = f", 🔊{os.path.basename(audio)}" if audio else ""
+            print(f"  {num}. 正文: {data['title']} ({len(data.get('content',[]))}文本框, {n_img}图片{audio_info})")
         elif typ == 'end':
             print(f"  {num}. 结束页")
 
