@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-PPT生成器 - V12
-在模板上直接操作，XML深拷贝幻灯片，用rId追踪排序
+PPT生成器 - V13
+V12 基础上新增：
+- 模板按 (文本框数, 图片数) 二维索引匹配
+- 图片嵌入：替换模板中的图片为 MD 引用的图片
 """
 
 from pptx import Presentation
 from pptx.util import Pt, Emu
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.dml.color import RGBColor
 from pptx.parts.slide import SlidePart
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.opc.packuri import PackURI
 from lxml import etree
-import re, copy
+import re, copy, os
 from pypinyin import pinyin, Style
 
 NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
@@ -20,40 +23,122 @@ NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
 
 class PPTGenerator:
-    def __init__(self, template_path, md_content):
+    def __init__(self, template_path, md_content, md_dir=None):
         self.template_path = template_path
         self.md_content = md_content
+        # MD 文件所在目录，用于解析图片相对路径
+        self.md_dir = md_dir or os.path.dirname(os.path.abspath(template_path))
         self.prs = Presentation(template_path)
         self._analyze_templates()
 
     # ── 模板分析 ──────────────────────────────────────────
 
+    def _count_images(self, slide):
+        """统计幻灯片中的图片数量"""
+        count = 0
+        for s in slide.shapes:
+            if s.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                count += 1
+        return count
+
     def _analyze_templates(self):
+        """分析模板，按 (文本框数, 图片数) 二维索引正文模板"""
         self.templates = {
             'cover': None, 'toc': None, 'section': None, 'end': None,
-            'content_1': [], 'content_2': [], 'content_3': [], 'content_4': [],
         }
+        # 二维索引：(h3_count, img_count) -> [模板页索引列表]
+        self.content_index = {}
+
         for idx, slide in enumerate(self.prs.slides):
             ph = self._find_all_placeholders(slide)
+            img_count = self._count_images(slide)
+
+            # 结束页
             if any('谢' in s.text_frame.text or 'xiè' in s.text_frame.text.lower()
                    for s in slide.shapes if s.has_text_frame):
-                self.templates['end'] = idx; continue
+                self.templates['end'] = idx
+                continue
+
+            # 封面页
             if 'h0_0' in ph:
-                self.templates['cover'] = idx; continue
+                self.templates['cover'] = idx
+                continue
+
+            # 章节页
             if 'h1_0' in ph and 'h2_0' not in ph:
-                self.templates['section'] = idx; continue
+                self.templates['section'] = idx
+                continue
+
+            # 正文页 — 按 (文本框数, 图片数) 索引
             if 'h2_0' in ph:
-                n = len([p for p in ph if p.startswith('h3_')])
-                self.templates[f'content_{min(n,4)}'].append(idx); continue
+                h3_count = len([p for p in ph if p.startswith('h3_')])
+                key = (h3_count, img_count)
+                self.content_index.setdefault(key, []).append(idx)
+                continue
+
+            # 目录页
             for s in slide.shapes:
                 if s.has_text_frame and ('目录' in s.text_frame.text or 'mù lù' in s.text_frame.text.lower()):
-                    self.templates['toc'] = idx; break
+                    self.templates['toc'] = idx
+                    break
 
+        # 打印分析结果
         _p = lambda k: f"第{self.templates[k]+1}页" if self.templates[k] is not None else "无"
-        cnt = lambda k: len(self.templates[f'content_{k}'])
-        print(f"\n=== 模板分析 ===")
+        print(f"\n=== 模板分析 (V13) ===")
         print(f"封面:{_p('cover')} 目录:{_p('toc')} 章节:{_p('section')} 结束:{_p('end')}")
-        print(f"正文: 1框×{cnt(1)} 2框×{cnt(2)} 3框×{cnt(3)} 4框×{cnt(4)}")
+        print(f"正文模板 (文本框×图片):")
+        for k in sorted(self.content_index.keys()):
+            pages = [f"页{i+1}" for i in self.content_index[k]]
+            print(f"  {k[0]}文本框 × {k[1]}图片 → {pages}")
+
+    # ── 模板匹配 ──────────────────────────────────────────
+
+    def _match_content_template(self, text_count, image_count):
+        """
+        匹配正文模板：优先精确匹配 (文本框数, 图片数)
+        降级策略：
+        1. 精确匹配 (text_count, image_count)
+        2. 同文本框数，图片数 >= image_count 的最小值
+        3. 文本框数 >= text_count，图片数 >= image_count 的最小组合
+        4. 仅按文本框数匹配（忽略图片数）
+        5. 任意可用模板
+        """
+        tc = min(text_count, 4)
+        ic = image_count
+
+        # 1. 精确匹配
+        if (tc, ic) in self.content_index:
+            return self.content_index[(tc, ic)]
+
+        # 2. 同文本框数，图片数 >= ic 的最小值
+        candidates = [(k, v) for k, v in self.content_index.items() if k[0] == tc and k[1] >= ic]
+        if candidates:
+            candidates.sort(key=lambda x: x[0][1])
+            return candidates[0][1]
+
+        # 3. 文本框数 >= tc，图片数 >= ic
+        candidates = [(k, v) for k, v in self.content_index.items() if k[0] >= tc and k[1] >= ic]
+        if candidates:
+            candidates.sort(key=lambda x: (x[0][0], x[0][1]))
+            return candidates[0][1]
+
+        # 4. 仅按文本框数匹配
+        candidates = [(k, v) for k, v in self.content_index.items() if k[0] == tc]
+        if candidates:
+            candidates.sort(key=lambda x: x[0][1])
+            return candidates[0][1]
+
+        # 5. 文本框数 >= tc
+        candidates = [(k, v) for k, v in self.content_index.items() if k[0] >= tc]
+        if candidates:
+            candidates.sort(key=lambda x: (x[0][0], x[0][1]))
+            return candidates[0][1]
+
+        # 6. 任意可用
+        if self.content_index:
+            return list(self.content_index.values())[0]
+
+        return None
 
     # ── 幻灯片XML深拷贝 ──────────────────────────────────
 
@@ -95,6 +180,83 @@ class PPTGenerator:
     def _get_rId_by_idx(self, idx):
         """获取原始模板页的rId"""
         return self.prs.slides._sldIdLst[idx].rId
+
+    # ── 图片替换 ──────────────────────────────────────────
+
+    def _get_picture_shapes(self, slide):
+        """获取幻灯片中所有图片shape，按位置排序（左上→右下）"""
+        pics = []
+        for s in slide.shapes:
+            if s.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                pics.append(s)
+        # 按 top 再按 left 排序，保证替换顺序一致
+        pics.sort(key=lambda s: (s.top, s.left))
+        return pics
+
+    def _replace_image(self, slide, pic_shape, image_path):
+        """替换幻灯片中的一个图片，保持原位置和尺寸"""
+        # 解析图片路径
+        abs_path = self._resolve_image_path(image_path)
+        if not abs_path or not os.path.exists(abs_path):
+            print(f"    ⚠️ 图片不存在: {image_path}")
+            return False
+
+        # 获取原图的位置和尺寸
+        left = pic_shape.left
+        top = pic_shape.top
+        width = pic_shape.width
+        height = pic_shape.height
+
+        # 删除原图片 shape
+        sp_elem = pic_shape._element
+        sp_elem.getparent().remove(sp_elem)
+
+        # 在相同位置添加新图片
+        slide.shapes.add_picture(abs_path, left, top, width, height)
+        return True
+
+    def _resolve_image_path(self, image_path):
+        """解析图片路径：支持绝对路径、相对于MD文件的路径"""
+        if os.path.isabs(image_path):
+            return image_path
+
+        # 相对于 MD 文件目录
+        candidate = os.path.join(self.md_dir, image_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于模板目录
+        template_dir = os.path.dirname(os.path.abspath(self.template_path))
+        candidate = os.path.join(template_dir, image_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于当前工作目录
+        if os.path.exists(image_path):
+            return os.path.abspath(image_path)
+
+        return None
+
+    def _replace_images_on_slide(self, slide, image_urls):
+        """替换幻灯片上的图片，按位置顺序一一对应"""
+        if not image_urls:
+            return
+
+        pic_shapes = self._get_picture_shapes(slide)
+        if not pic_shapes:
+            print(f"    ⚠️ 模板页无图片可替换，但MD有 {len(image_urls)} 张图片")
+            return
+
+        replaced = 0
+        for i, url in enumerate(image_urls):
+            if i >= len(pic_shapes):
+                print(f"    ⚠️ 图片 {url} 无对应模板图片位置（已用完 {len(pic_shapes)} 个位置）")
+                break
+            if self._replace_image(slide, pic_shapes[i], url):
+                replaced += 1
+
+        if replaced > 0:
+            print(f"    📷 替换 {replaced}/{len(image_urls)} 张图片")
 
     # ── 拼音表格 ─────────────────────────────────────────
 
@@ -213,23 +375,39 @@ class PPTGenerator:
             for j, t in enumerate(data.get('content', [])):
                 self._fill(slide, f'h3_{j}', t, 20); used.append(f'h3_{j}')
             self._clear_unused(slide, used)
-            print(f"  {num}. 正文: {data['title']}")
+            # 替换图片
+            images = data.get('images', [])
+            if images:
+                self._replace_images_on_slide(slide, images)
+            n_img = len(images)
+            print(f"  {num}. 正文: {data['title']} ({len(data.get('content',[]))}文本框, {n_img}图片)")
         elif typ == 'end':
             print(f"  {num}. 结束页")
 
     # ── 生成 ─────────────────────────────────────────────
 
     def generate(self):
-        print("\n=== 开始生成PPT ===")
+        print("\n=== 开始生成PPT (V13) ===")
 
         # 构建页面计划
         pages = []
-        ptr = {1: 0, 2: 0, 3: 0, 4: 0}
-        def next_content(n):
-            k = min(n, 4)
-            ts = self.templates[f'content_{k}']
-            if not ts: return None
-            idx = ts[ptr[k] % len(ts)]; ptr[k] += 1; return idx
+        # 每个 (text_count, img_count) 组合独立计数轮换
+        ptr = {}
+
+        def next_content(text_count, img_count):
+            """根据文本框数和图片数匹配模板，返回模板页索引"""
+            templates = self._match_content_template(text_count, img_count)
+            if not templates:
+                return None
+            # 用匹配到的模板列表做轮换
+            key = id(templates)  # 用列表 id 做 key，因为同一个列表对象会被复用
+            # 但更好的方式是用 tuple
+            tkey = tuple(templates)
+            if tkey not in ptr:
+                ptr[tkey] = 0
+            idx = templates[ptr[tkey] % len(templates)]
+            ptr[tkey] += 1
+            return idx
 
         if self.md_content.get('h0') and self.templates['cover'] is not None:
             pages.append(('cover', self.templates['cover'], self.md_content['h0'][0]))
@@ -242,14 +420,20 @@ class PPTGenerator:
             if sec and sec != cur_sec and self.templates['section'] is not None:
                 cur_sec = sec
                 pages.append(('section', self.templates['section'], sec))
-            idx = next_content(len(h2.get('content', [])))
+
+            text_count = len(h2.get('content', []))
+            img_count = len(h2.get('images', []))
+            idx = next_content(text_count, img_count)
             if idx is not None:
                 pages.append(('content', idx, h2))
+                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片) → 模板页{idx+1}")
+            else:
+                print(f"  ⚠️ 无法匹配: {h2['title']} ({text_count}文本框, {img_count}图片)")
 
         if self.templates['end'] is not None:
             pages.append(('end', self.templates['end'], None))
 
-        print(f"计划 {len(pages)} 页")
+        print(f"\n计划 {len(pages)} 页")
 
         # 保存原始模板页的 rId 映射
         orig_rIds = {}
@@ -269,6 +453,7 @@ class PPTGenerator:
             ordered_rIds.append(rId)
 
         # 第二步：填充内容（克隆完成后再填充，避免克隆已填充的内容）
+        print("\n--- 填充内容 ---")
         for i, (typ, tidx, data) in enumerate(pages):
             rId = ordered_rIds[i]
             slide = self._get_slide_by_rId(rId)
@@ -281,7 +466,7 @@ class PPTGenerator:
         for sldId in to_del:
             self.prs.part.drop_rel(sldId.rId)
             sldIdLst.remove(sldId)
-        print(f"删除 {len(to_del)} 页未使用模板")
+        print(f"\n删除 {len(to_del)} 页未使用模板")
 
         # 按最终顺序重排 sldIdLst
         rId_to_sldId = {s.rId: s for s in list(sldIdLst)}
@@ -300,7 +485,9 @@ if __name__ == '__main__':
     import sys
     from md_parser import MDParser
     if len(sys.argv) > 2:
-        parser = MDParser(sys.argv[1])
-        PPTGenerator(sys.argv[2], parser.parse()).generate()
+        md_path = sys.argv[1]
+        md_dir = os.path.dirname(os.path.abspath(md_path))
+        parser = MDParser(md_path)
+        PPTGenerator(sys.argv[2], parser.parse(), md_dir=md_dir).generate()
     else:
         print("用法: python ppt_generator.py <md文件> <模板文件>")
