@@ -635,14 +635,21 @@ class PPTGenerator:
             if video and 'video' in ph:
                 video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
             
-            # 如果没有占位符或嵌入失败，使用文本标记
+            # 如果嵌入失败，将音视频标记追加到最后一个文本框
             if audio and not audio_embedded:
                 audio_mark = f"[🔊 点击播放: {os.path.basename(audio)}]"
-                content_list.append(audio_mark)
+                if content_list:
+                    # 追加到最后一个文本框
+                    content_list[-1] = content_list[-1] + " " + audio_mark
+                else:
+                    content_list.append(audio_mark)
             
             if video and not video_embedded:
                 video_mark = f"[🎬 点击播放: {os.path.basename(video)}]"
-                content_list.append(video_mark)
+                if content_list:
+                    content_list[-1] = content_list[-1] + " " + video_mark
+                else:
+                    content_list.append(video_mark)
             
             # 填充所有文本框
             for j, t in enumerate(content_list):
