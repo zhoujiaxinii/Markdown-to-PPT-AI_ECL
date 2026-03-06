@@ -404,7 +404,8 @@ class PPTGenerator:
             s.text_frame.clear()
             s.left = Emu(0)
             
-            print(f"    🎵 嵌入{placeholder_name}: {os.path.basename(media_path)}")
+            emoji = "🔊" if placeholder_name == 'audio' else "🎬"
+            print(f"    {emoji} 嵌入{placeholder_name}: {os.path.basename(media_path)}")
             return True
         except Exception as e:
             print(f"    ⚠️ {placeholder_name}嵌入失败: {e}")

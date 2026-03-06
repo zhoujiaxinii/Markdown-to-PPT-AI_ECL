@@ -119,7 +119,7 @@
 ![减法1](assets/images/水果2.jpg)
 
 ### 2框4图无
-猫。||狗。||兔。||鸟。
+小猫喵喵。||小狗汪汪。
 
 ![动物1](assets/images/动物1.jpg)
 ![动物2](assets/images/动物2.jpg)
