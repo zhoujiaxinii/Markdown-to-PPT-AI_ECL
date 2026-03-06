@@ -70,11 +70,14 @@ class MDParser:
                 if content_text:
                     current_content.append({'type': 'text', 'content': content_text})
             
-            # 匹配图片 - ![图片](url) 或 ![图片1](url)
-            elif re.search(r'!\[图片[^\]]*\]', line):
-                match = re.search(r'!\[图片[^\]]*\]\(([^)]+)\)', line)
+            # 匹配图片 - ![任意文字](url) - 排除音视频
+            elif re.search(r'!\[.+\]\(.+\)', line) and '.mp3' not in line.lower() and '.mp4' not in line.lower():
+                match = re.search(r'!\[([^\]]+)\]\(([^)]+)\)', line)
                 if match:
-                    current_content.append({'type': 'image', 'url': match.group(1).strip()})
+                    url = match.group(2).strip()
+                    # 排除音频和视频
+                    if not url.endswith('.mp3') and not url.endswith('.mp4'):
+                        current_content.append({'type': 'image', 'url': url})
             
             # 匹配视频 - ![视频](url) 或 ![xxx.mp4](url)
             elif '![' in line and ('视频' in line or '.mp4)' in line.lower()):
