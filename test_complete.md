@@ -37,6 +37,7 @@
 
 ![绿色.mp3](assets/audio/学绿色.mp3)
 ![绿树1](assets/images/绿树1.jpg)
+![绿树2](assets/images/绿树1.jpg)
 
 ### 1框3图无
 白云。
@@ -50,6 +51,8 @@
 
 ![黄色.mp3](assets/audio/学黄色.mp3)
 ![香蕉1](assets/images/香蕉1.jpg)
+![香蕉2](assets/images/香蕉1.jpg)
+![香蕉3](assets/images/香蕉1.jpg)
 
 ### 1框4图无
 汽车。
@@ -64,6 +67,9 @@
 
 ![黑色.mp3](assets/audio/学黑色.mp3)
 ![黑夜1](assets/images/车1.jpg)
+![黑夜2](assets/images/车2.jpg)
+![黑夜3](assets/images/车3.jpg)
+![黑夜4](assets/images/车4.jpg)
 
 ### 1框5图无
 水果。
@@ -79,6 +85,10 @@
 
 ![白色.mp3](assets/audio/学白色.mp3)
 ![白兔1](assets/images/白兔1.jpg)
+![白兔2](assets/images/白兔1.jpg)
+![白兔3](assets/images/白兔1.jpg)
+![白兔4](assets/images/白兔1.jpg)
+![白兔5](assets/images/白兔1.jpg)
 
 ## 数字
 
@@ -117,6 +127,7 @@
 
 ![减法.mp3](assets/audio/学减法.mp3)
 ![减法1](assets/images/水果2.jpg)
+![减法2](assets/images/水果3.jpg)
 
 ### 2框4图无
 小猫喵喵。||小狗汪汪。
@@ -131,6 +142,9 @@
 
 ![数数.mp3](assets/audio/学数数.mp3)
 ![手指1](assets/images/手指1.jpg)
+![手指2](assets/images/手指1.jpg)
+![手指3](assets/images/手指1.jpg)
+![手指4](assets/images/手指1.jpg)
 
 ## 动物
 
@@ -146,6 +160,8 @@
 
 ![动物.mp3](assets/audio/学动物.mp3)
 ![狗1](assets/images/狗1.jpg)
+![狗2](assets/images/狗1.jpg)
+![狗3](assets/images/狗1.jpg)
 
 ### 4框1图无
 红色。||黄色。||蓝色。||绿色。
@@ -171,6 +187,9 @@
 
 ![汉字.mp3](assets/audio/学汉字.mp3)
 ![汉字1](assets/images/汉字1.jpg)
+![汉字2](assets/images/汉字1.jpg)
+![汉字3](assets/images/汉字1.jpg)
+![汉字4](assets/images/汉字1.jpg)
 
 ## 总结
 
