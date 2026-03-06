@@ -43,16 +43,22 @@ class PPTGenerator:
         return count
 
     def _analyze_templates(self):
-        """分析模板，按 (文本框数, 图片数) 二维索引正文模板"""
+        """分析模板，按 (文本框数, 图片数, 有无音视频) 三维索引正文模板"""
         self.templates = {
             'cover': None, 'toc': None, 'section': None, 'end': None,
         }
-        # 二维索引：(h3_count, img_count) -> [模板页索引列表]
+        # 三维索引：(h3_count, img_count, media_type) -> [模板页索引列表]
+        # media_type: None=无, 'audio'=有音频, 'video'=有视频
         self.content_index = {}
 
         for idx, slide in enumerate(self.prs.slides):
             ph = self._find_all_placeholders(slide)
             img_count = self._count_images(slide)
+            
+            # 检测是否有 audio/video 占位符（ph是字典，键是占位符名称）
+            has_audio = 'audio' in ph
+            has_video = 'video' in ph
+            media_type = 'video' if has_video else ('audio' if has_audio else None)
 
             # 结束页
             if any('谢' in s.text_frame.text or 'xiè' in s.text_frame.text.lower()
@@ -70,10 +76,10 @@ class PPTGenerator:
                 self.templates['section'] = idx
                 continue
 
-            # 正文页 — 按 (文本框数, 图片数) 索引
+            # 正文页 — 按 (文本框数, 图片数, 媒体类型) 索引
             if 'h2_0' in ph:
                 h3_count = len([p for p in ph if p.startswith('h3_')])
-                key = (h3_count, img_count)
+                key = (h3_count, img_count, media_type)
                 self.content_index.setdefault(key, []).append(idx)
                 continue
 
@@ -87,55 +93,76 @@ class PPTGenerator:
         _p = lambda k: f"第{self.templates[k]+1}页" if self.templates[k] is not None else "无"
         print(f"\n=== 模板分析 (V13) ===")
         print(f"封面:{_p('cover')} 目录:{_p('toc')} 章节:{_p('section')} 结束:{_p('end')}")
-        print(f"正文模板 (文本框×图片):")
-        for k in sorted(self.content_index.keys()):
+        print(f"正文模板 (文本框×图片×媒体):")
+        for k in sorted(self.content_index.keys(), key=lambda x: (x[0], x[1], str(x[2]))):
             pages = [f"页{i+1}" for i in self.content_index[k]]
-            print(f"  {k[0]}文本框 × {k[1]}图片 → {pages}")
+            media_str = f", {k[2]}" if k[2] else ""
+            print(f"  {k[0]}文本框 × {k[1]}图片{media_str} → {pages}")
 
     # ── 模板匹配 ──────────────────────────────────────────
 
-    def _match_content_template(self, text_count, image_count):
+    def _match_content_template(self, text_count, image_count, media_type=None):
         """
-        匹配正文模板：优先精确匹配 (文本框数, 图片数)
+        匹配正文模板：优先精确匹配 (文本框数, 图片数, 媒体类型)
         降级策略：
-        1. 精确匹配 (text_count, image_count)
-        2. 同文本框数，图片数 >= image_count 的最小值
-        3. 文本框数 >= text_count，图片数 >= image_count 的最小组合
-        4. 仅按文本框数匹配（忽略图片数）
-        5. 任意可用模板
+        1. 精确匹配 (text_count, image_count, media_type)
+        2. 同媒体类型，同文本框数，图片数 >= image_count 的最小值
+        3. 同媒体类型，文本框数 >= text_count，图片数 >= image_count 的最小组合
+        4. 同媒体类型，仅按文本框数匹配（忽略图片数）
+        5. 忽略媒体类型，精确匹配 (text_count, image_count)
+        6. 忽略媒体类型，按文本框数匹配
+        7. 任意可用模板
         """
         tc = min(text_count, 4)
         ic = image_count
 
-        # 1. 精确匹配
-        if (tc, ic) in self.content_index:
-            return self.content_index[(tc, ic)]
+        # 1. 精确匹配 (包含媒体类型)
+        if (tc, ic, media_type) in self.content_index:
+            return self.content_index[(tc, ic, media_type)]
 
-        # 2. 同文本框数，图片数 >= ic 的最小值
-        candidates = [(k, v) for k, v in self.content_index.items() if k[0] == tc and k[1] >= ic]
+        # 2. 同媒体类型，同文本框数，图片数 >= ic
+        if media_type:
+            candidates = [(k, v) for k, v in self.content_index.items() 
+                         if k[0] == tc and k[1] >= ic and k[2] == media_type]
+            if candidates:
+                candidates.sort(key=lambda x: x[0][1])
+                return candidates[0][1]
+
+        # 3. 同媒体类型，文本框数 >= tc，图片数 >= ic
+        if media_type:
+            candidates = [(k, v) for k, v in self.content_index.items() 
+                         if k[0] >= tc and k[1] >= ic and k[2] == media_type]
+            if candidates:
+                candidates.sort(key=lambda x: (x[0][0], x[0][1]))
+                return candidates[0][1]
+
+        # 4. 同媒体类型，仅按文本框数匹配
+        if media_type:
+            candidates = [(k, v) for k, v in self.content_index.items() 
+                         if k[0] == tc and k[2] == media_type]
+            if candidates:
+                candidates.sort(key=lambda x: x[0][1])
+                return candidates[0][1]
+
+        # 5. 忽略媒体类型，精确匹配
+        candidates = [(k, v) for k, v in self.content_index.items() 
+                     if k[0] == tc and k[1] == ic]
         if candidates:
-            candidates.sort(key=lambda x: x[0][1])
             return candidates[0][1]
 
-        # 3. 文本框数 >= tc，图片数 >= ic
-        candidates = [(k, v) for k, v in self.content_index.items() if k[0] >= tc and k[1] >= ic]
-        if candidates:
-            candidates.sort(key=lambda x: (x[0][0], x[0][1]))
-            return candidates[0][1]
-
-        # 4. 仅按文本框数匹配
+        # 6. 忽略媒体类型，按文本框数匹配
         candidates = [(k, v) for k, v in self.content_index.items() if k[0] == tc]
         if candidates:
             candidates.sort(key=lambda x: x[0][1])
             return candidates[0][1]
 
-        # 5. 文本框数 >= tc
+        # 7. 文本框数 >= tc
         candidates = [(k, v) for k, v in self.content_index.items() if k[0] >= tc]
         if candidates:
             candidates.sort(key=lambda x: (x[0][0], x[0][1]))
             return candidates[0][1]
 
-        # 6. 任意可用
+        # 8. 任意可用
         if self.content_index:
             return list(self.content_index.values())[0]
 
@@ -642,12 +669,12 @@ class PPTGenerator:
 
         # 构建页面计划
         pages = []
-        # 每个 (text_count, img_count) 组合独立计数轮换
+        # 每个 (text_count, img_count, media_type) 组合独立计数轮换
         ptr = {}
 
-        def next_content(text_count, img_count):
-            """根据文本框数和图片数匹配模板，返回模板页索引"""
-            templates = self._match_content_template(text_count, img_count)
+        def next_content(text_count, img_count, media_type=None):
+            """根据文本框数、图片数和媒体类型匹配模板，返回模板页索引"""
+            templates = self._match_content_template(text_count, img_count, media_type)
             if not templates:
                 return None
             # 用匹配到的模板列表做轮换
@@ -674,19 +701,23 @@ class PPTGenerator:
 
             # 基础文本框数量
             text_count = len(h2.get('content', []))
-            # 如果有音频/视频，需要额外文本框来显示标记
-            if h2.get('audio'):
-                text_count += 1
+            
+            # 确定媒体类型
             if h2.get('video'):
-                text_count += 1
+                media_type = 'video'
+            elif h2.get('audio'):
+                media_type = 'audio'
+            else:
+                media_type = None
             
             img_count = len(h2.get('images', []))
-            idx = next_content(text_count, img_count)
+            idx = next_content(text_count, img_count, media_type)
             if idx is not None:
                 pages.append(('content', idx, h2))
                 audio_mark = " 🔊" if h2.get('audio') else ""
                 video_mark = " 🎬" if h2.get('video') else ""
-                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{audio_mark}{video_mark}) → 模板页{idx+1}")
+                media_str = f", {media_type}" if media_type else ""
+                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{media_str}) → 模板页{idx+1}")
             else:
                 print(f"  ⚠️ 无法匹配: {h2['title']} ({text_count}文本框, {img_count}图片)")
 

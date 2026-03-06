@@ -76,17 +76,17 @@ class MDParser:
                 if match:
                     current_content.append({'type': 'image', 'url': match.group(1).strip()})
             
-            # 匹配视频 - ![视频](url)
-            elif '![' in line and '视频' in line:
-                match = re.search(r'!\[视频\]\(([^)]+)\)', line)
+            # 匹配视频 - ![视频](url) 或 ![xxx.mp4](url)
+            elif '![' in line and ('视频' in line or '.mp4)' in line.lower()):
+                match = re.search(r'!\[([^\]]+)\]\(([^)]+\.mp4)\)', line)
                 if match:
-                    current_content.append({'type': 'video', 'url': match.group(1).strip()})
+                    current_content.append({'type': 'video', 'url': match.group(2).strip()})
             
-            # 匹配音频 - ![音频](url)
-            elif '![' in line and '音频' in line:
-                match = re.search(r'!\[音频\]\(([^)]+)\)', line)
+            # 匹配音频 - ![音频](url) 或 ![xxx.mp3](url)
+            elif '![' in line and ('音频' in line or '.mp3)' in line.lower()):
+                match = re.search(r'!\[([^\]]+)\]\(([^)]+\.mp3)\)', line)
                 if match:
-                    current_content.append({'type': 'audio', 'url': match.group(1).strip()})
+                    current_content.append({'type': 'audio', 'url': match.group(2).strip()})
             
             # 匹配其他链接（非音视频）
             elif 'http' in line and '.mp3' not in line.lower() and '.mp4' not in line.lower():
@@ -130,6 +130,7 @@ class MDParser:
         for item in content_list:
             if item['type'] == 'text':
                 # 检查是否包含多文本框分隔符 ||
+                # || 分隔的是文本框，每个部分是一个完整的文本框内容
                 if '||' in item['content']:
                     text_parts = item['content'].split('||')
                     for part in text_parts:
