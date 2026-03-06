@@ -392,13 +392,28 @@ class PPTGenerator:
             if left == 0 and top == 0:
                 slide_width = self.prs.slide_width
                 slide_height = self.prs.slide_height
-                left = Emu(int(slide_width * 0.75))
-                top = Emu(int(slide_height * 0.75))
-                width = Emu(2000000)
-                height = Emu(2000000)
+                # 视频和音频使用不同的默认位置以便区分
+                if placeholder_name == 'video':
+                    left = Emu(int(slide_width * 0.7))
+                    top = Emu(int(slide_height * 0.6))
+                    width = Emu(2500000)
+                    height = Emu(2000000)
+                else:
+                    left = Emu(int(slide_width * 0.75))
+                    top = Emu(int(slide_height * 0.75))
+                    width = Emu(2000000)
+                    height = Emu(2000000)
             
             media_shape = slide.shapes.add_movie(abs_path, left, top, width, height, poster_frame_image=None)
             media_shape.name = "音频" if placeholder_name == 'audio' else "视频"
+            
+            # 视频添加标签以便区分
+            if placeholder_name == 'video':
+                textbox = slide.shapes.add_textbox(left, top - Emu(400000), width, Emu(300000))
+                tf = textbox.text_frame
+                p = tf.paragraphs[0]
+                p.text = "🎬 视频"
+                p.font.size = Emu(1400000)
             
             # 清除占位符文本
             s.text_frame.clear()
