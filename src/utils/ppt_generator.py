@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-PPT生成器 - V13
-V12 基础上新增：
+PPT生成器 - V16
+V13 基础上新增：
 - 模板按 (文本框数, 图片数) 二维索引匹配
 - 图片嵌入：替换模板中的图片为 MD 引用的图片
+- 音视频支持：{{audio}} 和 {{video}} 占位符 + 文本标记后备
 """
 
 from pptx import Presentation
@@ -339,6 +340,62 @@ class PPTGenerator:
             print(f"    ⚠️ 音频嵌入失败: {e}")
             return False
 
+    def _embed_media_to_placeholder(self, slide, placeholder_name, media_path):
+        """
+        将音视频嵌入到 {{audio}} 或 {{video}} 占位符位置
+        返回: 是否嵌入成功
+        """
+        ph = self._find_all_placeholders(slide)
+        if placeholder_name not in ph:
+            return False
+        
+        s = ph[placeholder_name]
+        abs_path = self._resolve_audio_path(media_path) if placeholder_name == 'audio' else self._resolve_video_path(media_path)
+        
+        if not abs_path:
+            print(f"    ⚠️ {placeholder_name}文件不存在: {media_path}")
+            return False
+        
+        try:
+            # 使用 add_movie 嵌入（音频和视频都可用）
+            left, top = s.left, s.top
+            width, height = s.width, s.height
+            
+            # 如果位置为0（占位符被清除），使用默认位置
+            if left == 0 and top == 0:
+                slide_width = self.prs.slide_width
+                slide_height = self.prs.slide_height
+                left = Emu(int(slide_width * 0.75))
+                top = Emu(int(slide_height * 0.75))
+                width = Emu(2000000)
+                height = Emu(2000000)
+            
+            media_shape = slide.shapes.add_movie(abs_path, left, top, width, height, poster_frame_image=None)
+            media_shape.name = "音频" if placeholder_name == 'audio' else "视频"
+            
+            # 清除占位符文本
+            s.text_frame.clear()
+            s.left = Emu(0)
+            
+            print(f"    🎵 嵌入{placeholder_name}: {os.path.basename(media_path)}")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}嵌入失败: {e}")
+            return False
+
+    def _resolve_video_path(self, video_path):
+        """解析视频路径"""
+        if os.path.isabs(video_path):
+            if os.path.exists(video_path):
+                return video_path
+            return None
+        
+        for base_dir in [self.md_dir, os.path.dirname(os.path.abspath(self.template_path)), os.getcwd()]:
+            candidate = os.path.join(base_dir, video_path)
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
     def _embed_audio_on_slide(self, slide, audio_path):
         """
         在幻灯片中嵌入音频
@@ -532,23 +589,35 @@ class PPTGenerator:
             self._fill(slide, 'h2_0', data['title'], 28)
             
             # 获取原始文本内容
-            content_list = data.get('content', [])
+            content_list = list(data.get('content', []))
             
-            # 添加音频标记（作为额外文本框）
+            # 获取音视频文件
             audio = data.get('audio')
             video = data.get('video')
             
-            # 音频标记
-            if audio:
+            # 检查模板是否有 {{audio}} 或 {{video}} 占位符
+            ph = self._find_all_placeholders(slide)
+            
+            # 尝试嵌入音频到占位符
+            audio_embedded = False
+            if audio and 'audio' in ph:
+                audio_embedded = self._embed_media_to_placeholder(slide, 'audio', audio)
+            
+            # 尝试嵌入视频到占位符
+            video_embedded = False
+            if video and 'video' in ph:
+                video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+            
+            # 如果没有占位符或嵌入失败，使用文本标记
+            if audio and not audio_embedded:
                 audio_mark = f"[🔊 点击播放: {os.path.basename(audio)}]"
-                content_list = list(content_list) + [audio_mark]
+                content_list.append(audio_mark)
             
-            # 视频标记
-            if video:
+            if video and not video_embedded:
                 video_mark = f"[🎬 点击播放: {os.path.basename(video)}]"
-                content_list = list(content_list) + [video_mark]
+                content_list.append(video_mark)
             
-            # 填充所有文本框（包括音频/视频标记）
+            # 填充所有文本框
             for j, t in enumerate(content_list):
                 self._fill(slide, f'h3_{j}', t, 20); used.append(f'h3_{j}')
             self._clear_unused(slide, used)
@@ -560,9 +629,9 @@ class PPTGenerator:
             n_img = len(images)
             
             # 统计信息
-            audio_info = f" 🔊{os.path.basename(audio)}" if audio else ""
-            video_info = f" 🎬{os.path.basename(video)}" if video else ""
-            print(f"  {num}. 正文: {data['title']} ({len(content_list)}文本框, {n_img}图片{audio_info}{video_info})")
+            audio_mark_type = "🔊" if audio else ""
+            video_mark_type = "🎬" if video else ""
+            print(f"  {num}. 正文: {data['title']} ({len(content_list)}文本框, {n_img}图片{audio_mark_type}{video_mark_type})")
         elif typ == 'end':
             print(f"  {num}. 结束页")
 
