@@ -135,12 +135,14 @@ class MDParser:
                 # 检查是否包含多文本框分隔符 ||
                 # || 分隔的是文本框，每个部分是一个完整的文本框内容
                 if '||' in item['content']:
+                    # 保留 || 两边所有内容（包括空字符串），用于精确控制文本框数量
                     text_parts = item['content'].split('||')
                     for part in text_parts:
                         part = part.strip()
-                        if part:
-                            texts.append(part)
-                            total_char_count += len(part)
+                        # 如果为空，用占位符替代
+                        text = part if part else "[空]"
+                        texts.append(text)
+                        total_char_count += len(part) if part else 0
                 else:
                     texts.append(item['content'])
                     total_char_count += len(item['content'])
