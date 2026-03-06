@@ -190,13 +190,3 @@
 ![汉字2](assets/images/汉字1.jpg)
 ![汉字3](assets/images/汉字1.jpg)
 ![汉字4](assets/images/汉字1.jpg)
-
-## 总结
-
-### 总结
-今天学的真多。||颜色数字动物。||谢谢老师！
-
-### 再见
-明天见。||再见！
-
-![再见](assets/images/再见.jpg)

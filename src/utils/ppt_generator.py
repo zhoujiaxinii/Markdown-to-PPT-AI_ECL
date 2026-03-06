@@ -71,6 +71,23 @@ class PPTGenerator:
                 self.templates['cover'] = idx
                 continue
 
+            # 目录页 - 必须在章节页之前检测（因为目录页也有h1占位符）
+            def has_toc_text(parent):
+                try:
+                    for s in parent.shapes:
+                        if s.has_text_frame and ('目录' in s.text_frame.text or 'mù lù' in s.text_frame.text.lower()):
+                            return True
+                        if s.shape_type == 6:  # GROUP
+                            if has_toc_text(s):
+                                return True
+                except:
+                    pass
+                return False
+            
+            if has_toc_text(slide):
+                self.templates['toc'] = idx
+                continue
+
             # 章节页
             if 'h1_0' in ph and 'h2_0' not in ph:
                 self.templates['section'] = idx
@@ -82,12 +99,6 @@ class PPTGenerator:
                 key = (h3_count, img_count, media_type)
                 self.content_index.setdefault(key, []).append(idx)
                 continue
-
-            # 目录页
-            for s in slide.shapes:
-                if s.has_text_frame and ('目录' in s.text_frame.text or 'mù lù' in s.text_frame.text.lower()):
-                    self.templates['toc'] = idx
-                    break
 
         # 打印分析结果
         _p = lambda k: f"第{self.templates[k]+1}页" if self.templates[k] is not None else "无"
@@ -593,11 +604,18 @@ class PPTGenerator:
 
     def _find_all_placeholders(self, slide):
         ph = {}
-        for s in slide.shapes:
+        self._find_placeholders_recursive(slide.shapes, ph)
+        return ph
+    
+    def _find_placeholders_recursive(self, shapes, ph, path=''):
+        """递归查找所有形状中的占位符"""
+        for s in shapes:
             if s.has_text_frame:
                 for m in re.findall(r'\{\{(\w+)\}\}', s.text_frame.text):
                     ph.setdefault(m, s)
-        return ph
+            # 递归查找GROUP中的形状
+            if s.shape_type == 6:  # GROUP
+                self._find_placeholders_recursive(s.shapes, ph, path + 'G/')
 
     def _fill(self, slide, name, content, fs=24):
         ph = self._find_all_placeholders(slide)
@@ -620,8 +638,10 @@ class PPTGenerator:
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'toc':
+            # DEBUG removed
             for j, s in enumerate(data):
-                self._fill(slide, f'h1_{j}', s, 20)
+                result = self._fill(slide, f'h1_{j}', s, 20)
+                # DEBUG removed
             print(f"  {num}. 目录: {len(data)}章")
         elif typ == 'section':
             self._fill(slide, 'h1_0', data, 32)
