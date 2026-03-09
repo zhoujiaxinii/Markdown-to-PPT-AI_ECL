@@ -734,10 +734,10 @@ class PPTGenerator:
 
         if self.md_content.get('h0') and self.templates['cover'] is not None:
             pages.append(('cover', self.templates['cover'], self.md_content['h0'][0]))
-        # 目录页使用H2标题（最多5个）
-        if self.md_content.get('h2') and self.templates['toc'] is not None:
-            h2_titles = [h2['title'] for h2 in self.md_content['h2'][:5]]
-            pages.append(('toc', self.templates['toc'], h2_titles))
+        # 目录页使用H1二级标题（章节名）
+        if self.md_content.get('h1') and self.templates['toc'] is not None:
+            h1_titles = self.md_content['h1'][:5]
+            pages.append(('toc', self.templates['toc'], h1_titles))
 
         cur_sec = None
         for h2 in self.md_content['h2']:
