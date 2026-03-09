@@ -108,7 +108,11 @@ class MDParser:
                 # 去除换行符，保留纯文本内容
                 text = line.replace('\n', ' ').strip()
                 if text:
-                    current_content.append({'type': 'text', 'content': text})
+                    # 如果上一个也是文本，追加到一起（用空格分隔）
+                    if current_content and current_content[-1]['type'] == 'text':
+                        current_content[-1]['content'] = current_content[-1]['content'] + ' ' + text
+                    else:
+                        current_content.append({'type': 'text', 'content': text})
         
         # 处理最后一个小节
         if current_h2:
