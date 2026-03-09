@@ -227,7 +227,12 @@ class PPTGenerator:
 
     def _replace_image(self, slide, pic_shape, image_path):
         """替换幻灯片中的一个图片，保持原位置和尺寸"""
-        # 解析图片路径
+        # 在线图片URL - 暂不支持下载，使用占位符
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            print(f"    ⏭️ 在线图片暂不下载: {image_path[:50]}...")
+            return True  # 跳过但不报错
+        
+        # 解析本地图片路径
         abs_path = self._resolve_image_path(image_path)
         if not abs_path or not os.path.exists(abs_path):
             print(f"    ⚠️ 图片不存在: {image_path}")
