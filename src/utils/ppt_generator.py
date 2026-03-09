@@ -45,7 +45,7 @@ class PPTGenerator:
     def _analyze_templates(self):
         """分析模板，按 (文本框数, 图片数, 有无音视频) 三维索引正文模板"""
         self.templates = {
-            'cover': None, 'toc': None, 'section': None, 'end': None,
+            'cover': None, 'section': None, 'end': None,
         }
         # 三维索引：(h3_count, img_count, media_type) -> [模板页索引列表]
         # media_type: None=无, 'audio'=有音频, 'video'=有视频
@@ -71,23 +71,6 @@ class PPTGenerator:
                 self.templates['cover'] = idx
                 continue
 
-            # 目录页 - 必须在章节页之前检测（因为目录页也有h1占位符）
-            def has_toc_text(parent):
-                try:
-                    for s in parent.shapes:
-                        if s.has_text_frame and ('目录' in s.text_frame.text or 'mù lù' in s.text_frame.text.lower()):
-                            return True
-                        if s.shape_type == 6:  # GROUP
-                            if has_toc_text(s):
-                                return True
-                except:
-                    pass
-                return False
-            
-            if has_toc_text(slide):
-                self.templates['toc'] = idx
-                continue
-
             # 章节页
             if 'h1_0' in ph and 'h2_0' not in ph:
                 self.templates['section'] = idx
@@ -103,7 +86,7 @@ class PPTGenerator:
         # 打印分析结果
         _p = lambda k: f"第{self.templates[k]+1}页" if self.templates[k] is not None else "无"
         print(f"\n=== 模板分析 (V13) ===")
-        print(f"封面:{_p('cover')} 目录:{_p('toc')} 章节:{_p('section')} 结束:{_p('end')}")
+        print(f"封面:{_p('cover')} 章节:{_p('section')} 结束:{_p('end')}")
         print(f"正文模板 (文本框×图片×媒体):")
         for k in sorted(self.content_index.keys(), key=lambda x: (x[0], x[1], str(x[2]))):
             pages = [f"页{i+1}" for i in self.content_index[k]]
@@ -637,14 +620,6 @@ class PPTGenerator:
             self._fill(slide, 'h0_0', data, 36)
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
-        elif typ == 'toc':
-            # 目录页使用拼音表填充（表格形式，拼音和汉字对齐）
-            for j, title in enumerate(data):
-                self._fill(slide, f'h1_{j}', title, 20)
-            # 清除未使用的目录占位符
-            used = [f'h1_{j}' for j in range(len(data))]
-            self._clear_unused(slide, used)
-            print(f"  {num}. 目录: {len(data)}项")
         elif typ == 'section':
             self._fill(slide, 'h1_0', data, 32)
             self._clear_unused(slide, ['h1_0'])
@@ -734,10 +709,6 @@ class PPTGenerator:
 
         if self.md_content.get('h0') and self.templates['cover'] is not None:
             pages.append(('cover', self.templates['cover'], self.md_content['h0'][0]))
-        # 目录页使用H1二级标题（章节名）
-        if self.md_content.get('h1') and self.templates['toc'] is not None:
-            h1_titles = self.md_content['h1'][:5]
-            pages.append(('toc', self.templates['toc'], h1_titles))
 
         cur_sec = None
         for h2 in self.md_content['h2']:
