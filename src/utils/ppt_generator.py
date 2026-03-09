@@ -454,11 +454,16 @@ class PPTGenerator:
             if self._embed_media_file(slide, placeholder_name, s, local_path):
                 return True
         
-        # 无法嵌入时，清除占位符，不显示任何图标
-        s.text_frame.clear()
-        s.left = Emu(0)
+        # 无法嵌入时，显示"嵌入失败"文本
+        tf = s.text_frame
+        tf.clear()
+        p = tf.paragraphs[0]
+        p.text = f"【⚠️ {placeholder_name}嵌入失败】"
+        p.font.size = Pt(18)
+        p.font.name = 'SimHei'
+        p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+        p.alignment = PP_ALIGN.CENTER
         print(f"    ⚠️ {placeholder_name}嵌入失败")
-        return False
 
     def _embed_media_from_url(self, slide, placeholder_name, shape, media_url):
         """从在线URL下载音视频并嵌入PPT"""
