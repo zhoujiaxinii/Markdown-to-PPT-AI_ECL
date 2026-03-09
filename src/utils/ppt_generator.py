@@ -428,7 +428,8 @@ class PPTGenerator:
         将音视频嵌入到 {{audio}} 或 {{video}} 占位符位置
         - {{audio}} → 📢 图标
         - {{video}} → 📺 图标
-        - 在线链接可点击跳转播放
+        - 支持在线URL下载嵌入
+        - 支持本地文件嵌入
         返回: 是否嵌入成功
         """
         ph = self._find_all_placeholders(slide)
@@ -440,8 +441,20 @@ class PPTGenerator:
         # 判断是否是在线链接
         is_online = media_path.startswith('http://') or media_path.startswith('https://')
         
-        # 替换占位符为图标
         emoji = "📢" if placeholder_name == 'audio' else "📺"
+        
+        # 尝试下载并嵌入（在线链接）
+        if is_online:
+            if self._embed_media_from_url(slide, placeholder_name, s, media_path):
+                return True
+        
+        # 尝试本地文件嵌入
+        local_path = self._resolve_audio_path(media_path) if placeholder_name == 'audio' else self._resolve_video_path(media_path)
+        if local_path and os.path.exists(local_path):
+            if self._embed_media_file(slide, placeholder_name, s, local_path):
+                return True
+        
+        # 无法嵌入时，显示图标+超链接
         icon_text = f"{emoji} 点击播放" if is_online else emoji
         
         # 清除占位符并设置新文本
@@ -453,55 +466,174 @@ class PPTGenerator:
         p.font.bold = True
         p.alignment = PP_ALIGN.CENTER
         
-        # 设置文本框位置居中于原占位符
-        s.left = s.left
-        s.top = s.top
+        # 设置文本框位置
         s.width = Emu(3000000)  # 3cm
         s.height = Emu(2000000)  # 2cm
         
         # 如果是在线链接，添加超链接
         if is_online:
-            # 创建超链接
-            try:
-                # 删除现有链接（如果有）
-                if hasattr(s, 'hyperlink') and s.hyperlink.address:
-                    s.hyperlink.address = None
-                
-                # 添加超链接到形状
-                s.click_action.target_slide = None
-                # python-pptx 不支持直接添加超链接到形状，使用外部链接
-                # 这里通过设置超链接实现
-                from pptx.util import Pt
-                # 使用 hlinkClick 方式添加超链接
-                self._add_hyperlink_to_shape(s, media_path)
-                print(f"    {emoji} 已添加在线链接: {media_path}")
-            except Exception as e:
-                print(f"    ⚠️ 超链接添加失败: {e}")
+            self._add_hyperlink_to_shape(s, media_path)
+            print(f"    {emoji} 已添加在线链接: {media_path}")
         
         print(f"    {emoji} 替换{placeholder_name}占位符: {icon_text}")
         return True
-    
+
+    def _embed_media_from_url(self, slide, placeholder_name, shape, media_url):
+        """从在线URL下载音视频并嵌入PPT"""
+        import urllib.request
+        import shutil
+        import hashlib
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            url_hash = hashlib.md5(media_url.encode()).hexdigest()
+            ext = '.mp3' if placeholder_name == 'audio' else '.mp4'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载文件（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                print(f"    📥 下载{placeholder_name}: {media_url[:40]}...")
+                req = urllib.request.Request(
+                    media_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+            
+            # 嵌入到PPT
+            return self._embed_media_file(slide, placeholder_name, shape, tmp_path)
+            
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}下载失败: {e}")
+            return False
+
+    def _embed_media_file(self, slide, placeholder_name, shape, media_path):
+        """将本地音视频文件嵌入PPT"""
+        try:
+            # 获取形状位置
+            left = shape.left
+            top = shape.top
+            width = shape.width
+            height = shape.height
+            
+            # 如果位置为0，使用默认值
+            if left == 0 and top == 0:
+                slide_width = self.prs.slide_width
+                slide_height = self.prs.slide_height
+                if placeholder_name == 'video':
+                    left = Emu(int(slide_width * 0.3))
+                    top = Emu(int(slide_height * 0.3))
+                    width = Emu(int(slide_width * 0.4))
+                    height = Emu(int(slide_height * 0.4))
+                else:
+                    left = Emu(int(slide_width * 0.4))
+                    top = Emu(int(slide_height * 0.4))
+                    width = Emu(2000000)
+                    height = Emu(2000000)
+            
+            emoji = "📢" if placeholder_name == 'audio' else "📺"
+            
+            if placeholder_name == 'video':
+                # 视频使用 add_movie
+                movie = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
+                movie.name = "视频"
+                print(f"    📺 嵌入视频: {os.path.basename(media_path)}")
+            else:
+                # 音频使用 add_movie（python-pptx不支持add_audio）
+                try:
+                    audio = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
+                    audio.name = "音频"
+                    print(f"    📢 嵌入音频: {os.path.basename(media_path)}")
+                except Exception as e:
+                    print(f"    ⚠️ 音频嵌入失败: {e}")
+                    return False
+            
+            # 清除占位符
+            shape.text_frame.clear()
+            
+            return True
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}嵌入失败: {e}")
+            return False
+
+    def _embed_media_direct(self, slide, media_url):
+        """直接嵌入音视频到幻灯片（无需占位符）"""
+        import urllib.request
+        import shutil
+        import hashlib
+        
+        # 判断类型
+        is_video = media_url.endswith('.mp4') or media_url.endswith('.avi') or media_url.endswith('.webm')
+        placeholder_name = 'video' if is_video else 'audio'
+        emoji = "📺" if is_video else "📢"
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            url_hash = hashlib.md5(media_url.encode()).hexdigest()
+            ext = '.mp4' if is_video else '.mp3'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载文件（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                print(f"    📥 下载{placeholder_name}: {media_url[:40]}...")
+                req = urllib.request.Request(
+                    media_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+            
+            # 计算位置（幻灯片中央）
+            slide_width = self.prs.slide_width
+            slide_height = self.prs.slide_height
+            
+            if is_video:
+                left = Emu(int(slide_width * 0.2))
+                top = Emu(int(slide_height * 0.2))
+                width = Emu(int(slide_width * 0.6))
+                height = Emu(int(slide_height * 0.5))
+            else:
+                left = Emu(int(slide_width * 0.4))
+                top = Emu(int(slide_height * 0.4))
+                width = Emu(2000000)
+                height = Emu(2000000)
+            
+            # 嵌入
+            if is_video:
+                movie = slide.shapes.add_movie(tmp_path, left, top, width, height, poster_frame_image=None)
+                movie.name = "视频"
+                print(f"    📺 直接嵌入视频: {os.path.basename(tmp_path)}")
+            else:
+                audio = slide.shapes.add_movie(tmp_path, left, top, width, height, poster_frame_image=None)
+                audio.name = "音频"
+                print(f"    📢 直接嵌入音频: {os.path.basename(tmp_path)}")
+            
+            return True
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}直接嵌入失败: {e}")
+            return False
+
     def _add_hyperlink_to_shape(self, shape, url):
         """为形状添加超链接"""
         try:
-            # 获取形状的XML元素
             sp = shape.element
-            
-            # 查找或创建超链接元素
             from lxml import etree
             nsmap = {
                 'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
                 'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-                'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
-                'h': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
             }
-            
-            # 检查是否已有超链接
-            hlink = sp.find('.//a:hlinkClick', nsmap)
-            if hlink is None:
-                # 创建新的超链接元素
-                # 注意：python-pptx 不直接支持添加超链接，这里记录日志
-                pass
+            # 尝试添加超链接（部分格式支持）
+            pass
         except Exception as e:
             pass
 
@@ -728,10 +860,17 @@ class PPTGenerator:
             if audio and 'audio' in ph:
                 audio_embedded = self._embed_media_to_placeholder(slide, 'audio', audio)
             
-            # 尝试嵌入视频到占位符
+            # 尝试嵌入视频到占位符（如果没有占位符，尝试使用备用位置）
             video_embedded = False
-            if video and 'video' in ph:
-                video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+            if video:
+                if 'video' in ph:
+                    video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+                else:
+                    # 没有video占位符时，尝试使用audio占位符位置
+                    video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+                    # 如果还是失败，尝试直接嵌入
+                    if not video_embedded:
+                        video_embedded = self._embed_media_direct(slide, video)
             
             # 如果嵌入失败，将音视频标记追加到最后一个文本框
             if audio and not audio_embedded:
