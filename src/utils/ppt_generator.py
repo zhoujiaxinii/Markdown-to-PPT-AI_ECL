@@ -904,9 +904,9 @@ class PPTGenerator:
 
     def _clear_unused(self, slide, used):
         """清除未使用的占位符（文本框和图片）"""
-        # 清除文本占位符
+        # 清除文本占位符 - 清除所有仍包含{{...}}的占位符
         for name, s in self._find_all_placeholders(slide).items():
-            if name not in used:
+            if name not in used or '{{' in s.text_frame.text:
                 s.text_frame.clear()
                 s.left = Emu(0)
         
