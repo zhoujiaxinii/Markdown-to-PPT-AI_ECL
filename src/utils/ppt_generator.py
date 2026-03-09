@@ -832,8 +832,29 @@ class PPTGenerator:
         ph = self._find_all_placeholders(slide)
         if name not in ph: return False
         s = ph[name]
-        self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
-        s.text_frame.clear(); s.left = Emu(0)
+        
+        # 检查是否包含汉字
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
+        
+        if has_chinese:
+            # 有汉字：用拼音表格处理（支持换行）
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
+        else:
+            # 无汉字：直接设置文本框内容，保留换行符
+            s.text_frame.clear()
+            # 按换行符分割并添加段落
+            lines = content.split('\n')
+            for i, line in enumerate(lines):
+                if i == 0:
+                    s.text_frame.paragraphs[0].text = line
+                else:
+                    p = s.text_frame.add_paragraph()
+                    p.text = line
+                s.text_frame.paragraphs[i].font.size = Pt(fs)
+                s.text_frame.paragraphs[i].font.name = 'SimHei'  # 黑体
+                s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
+        
+        s.left = Emu(0)
         return True
 
     def _center_text(self, slide, name):
