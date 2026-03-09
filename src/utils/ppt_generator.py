@@ -638,14 +638,9 @@ class PPTGenerator:
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'toc':
-            # 目录页直接填充文本（不使用拼音表）
-            ph = self._find_all_placeholders(slide)
+            # 目录页使用拼音表填充（显示拼音+汉字）
             for j, title in enumerate(data):
-                key = f'h1_{j}'
-                if key in ph:
-                    s = ph[key]
-                    s.text_frame.clear()
-                    s.text_frame.paragraphs[0].text = title
+                self._fill(slide, f'h1_{j}', title, 20)
             # 清除未使用的目录占位符
             used = [f'h1_{j}' for j in range(len(data))]
             self._clear_unused(slide, used)
@@ -739,10 +734,10 @@ class PPTGenerator:
 
         if self.md_content.get('h0') and self.templates['cover'] is not None:
             pages.append(('cover', self.templates['cover'], self.md_content['h0'][0]))
-        # 目录页使用H2标题（最多5个，对应h1_0到h1_4）
-        if self.md_content.get('h2') and self.templates['toc'] is not None:
-            h2_titles = [h2['title'] for h2 in self.md_content['h2'][:5]]
-            pages.append(('toc', self.templates['toc'], h2_titles))
+        # 目录页使用H1章节名（最多5个）
+        if self.md_content.get('h1') and self.templates['toc'] is not None:
+            h1_titles = self.md_content['h1'][:5]
+            pages.append(('toc', self.templates['toc'], h1_titles))
 
         cur_sec = None
         for h2 in self.md_content['h2']:
