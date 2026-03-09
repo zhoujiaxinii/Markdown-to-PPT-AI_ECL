@@ -1,7 +1,7 @@
 # PPT 模板编写规则说明
 
 > 更新日期：2026-03-06
-> 基于 3.6 模板.pptx (32页)
+> 基于 3.9 模板.pptx (32页)
 
 ## 一、占位符命名规范
 
@@ -169,7 +169,7 @@
 
 ---
 
-## 七、3.6 模板结构（32页）
+## 七、3.9 模板结构（32页）
 
 | 页码 | 类型 | 文本框 | 音频/视频 | 图片 |
 |------|------|--------|-----------|------|
@@ -246,7 +246,7 @@ from src.utils.md_parser import MDParser
 from src.utils.ppt_generator import PPTGenerator
 import os
 parser = MDParser('test_sample.md')
-PPTGenerator('案例/3.6 模板.pptx', parser.parse(), md_dir=os.getcwd()).generate()
+PPTGenerator('案例/3.9 模板.pptx', parser.parse(), md_dir=os.getcwd()).generate()
 "
 ```
 
