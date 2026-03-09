@@ -771,7 +771,7 @@ class PPTGenerator:
                 cell.text = txt; cell.text_frame.word_wrap = True  # 允许自动换行
                 pa = cell.text_frame.paragraphs[0]
                 pa.font.size = Pt(fs)
-                pa.font.name = 'Arial' if ri == 0 else 'SimSun'
+                pa.font.name = 'SimHei'  # 黑体
                 pa.font.color.rgb = RGBColor(0, 0, 0)
                 pa.alignment = PP_ALIGN.CENTER
                 cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
