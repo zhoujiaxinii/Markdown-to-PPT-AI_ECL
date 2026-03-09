@@ -996,7 +996,18 @@ class PPTGenerator:
             images = data.get('images', [])
             if images:
                 self._replace_images_on_slide(slide, images)
+                # 标记图片占位符为已使用（p1-p20）
+                for i in range(min(len(images), 20)):
+                    used.append(f'p{i+1}')
             n_img = len(images)
+            
+            # 标记音频占位符为已使用
+            if audio and 'audio' in ph:
+                used.append('audio')
+            
+            # 标记视频占位符为已使用
+            if video and 'video' in ph:
+                used.append('video')
             
             # 统计信息
             audio_mark_type = "🔊" if audio else ""
