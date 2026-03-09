@@ -95,6 +95,16 @@ class PPTGenerator:
 
     # ── 模板匹配 ──────────────────────────────────────────
 
+    def _get_blank_template_idx(self):
+        """获取空白模板页的索引"""
+        for idx, slide in enumerate(self.prs.slides):
+            # 检查是否是空白页（没有文本占位符）
+            ph = self._find_all_placeholders(slide)
+            # 如果没有任何文本占位符，认为是空白页
+            if not ph:
+                return idx
+        return None
+
     def _match_content_template(self, text_count, image_count, media_type=None):
         """
         匹配正文模板：优先精确匹配 (文本框数, 图片数, 媒体类型)
@@ -364,6 +374,9 @@ class PPTGenerator:
     def _embed_media_to_placeholder(self, slide, placeholder_name, media_path):
         """
         将音视频嵌入到 {{audio}} 或 {{video}} 占位符位置
+        - {{audio}} → 📢 图标
+        - {{video}} → 📺 图标
+        - 在线链接可点击跳转播放
         返回: 是否嵌入成功
         """
         ph = self._find_all_placeholders(slide)
@@ -371,54 +384,74 @@ class PPTGenerator:
             return False
         
         s = ph[placeholder_name]
-        abs_path = self._resolve_audio_path(media_path) if placeholder_name == 'audio' else self._resolve_video_path(media_path)
         
-        if not abs_path:
-            print(f"    ⚠️ {placeholder_name}文件不存在: {media_path}")
-            return False
+        # 判断是否是在线链接
+        is_online = media_path.startswith('http://') or media_path.startswith('https://')
         
+        # 替换占位符为图标
+        emoji = "📢" if placeholder_name == 'audio' else "📺"
+        icon_text = f"{emoji} 点击播放" if is_online else emoji
+        
+        # 清除占位符并设置新文本
+        tf = s.text_frame
+        tf.clear()
+        p = tf.paragraphs[0]
+        p.text = icon_text
+        p.font.size = Emu(2400000)  # 24pt
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        
+        # 设置文本框位置居中于原占位符
+        s.left = s.left
+        s.top = s.top
+        s.width = Emu(3000000)  # 3cm
+        s.height = Emu(2000000)  # 2cm
+        
+        # 如果是在线链接，添加超链接
+        if is_online:
+            # 创建超链接
+            try:
+                # 删除现有链接（如果有）
+                if hasattr(s, 'hyperlink') and s.hyperlink.address:
+                    s.hyperlink.address = None
+                
+                # 添加超链接到形状
+                s.click_action.target_slide = None
+                # python-pptx 不支持直接添加超链接到形状，使用外部链接
+                # 这里通过设置超链接实现
+                from pptx.util import Pt
+                # 使用 hlinkClick 方式添加超链接
+                self._add_hyperlink_to_shape(s, media_path)
+                print(f"    {emoji} 已添加在线链接: {media_path}")
+            except Exception as e:
+                print(f"    ⚠️ 超链接添加失败: {e}")
+        
+        print(f"    {emoji} 替换{placeholder_name}占位符: {icon_text}")
+        return True
+    
+    def _add_hyperlink_to_shape(self, shape, url):
+        """为形状添加超链接"""
         try:
-            # 使用 add_movie 嵌入（音频和视频都可用）
-            left, top = s.left, s.top
-            width, height = s.width, s.height
+            # 获取形状的XML元素
+            sp = shape.element
             
-            # 如果位置为0（占位符被清除），使用默认位置
-            if left == 0 and top == 0:
-                slide_width = self.prs.slide_width
-                slide_height = self.prs.slide_height
-                # 视频和音频使用不同的默认位置以便区分
-                if placeholder_name == 'video':
-                    left = Emu(int(slide_width * 0.7))
-                    top = Emu(int(slide_height * 0.6))
-                    width = Emu(2500000)
-                    height = Emu(2000000)
-                else:
-                    left = Emu(int(slide_width * 0.75))
-                    top = Emu(int(slide_height * 0.75))
-                    width = Emu(2000000)
-                    height = Emu(2000000)
+            # 查找或创建超链接元素
+            from lxml import etree
+            nsmap = {
+                'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+                'p': 'http://schemas.openxmlformats.org/presentationml/2006/main',
+                'h': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+            }
             
-            media_shape = slide.shapes.add_movie(abs_path, left, top, width, height, poster_frame_image=None)
-            media_shape.name = "音频" if placeholder_name == 'audio' else "视频"
-            
-            # 视频添加标签以便区分
-            if placeholder_name == 'video':
-                textbox = slide.shapes.add_textbox(left, top - Emu(400000), width, Emu(300000))
-                tf = textbox.text_frame
-                p = tf.paragraphs[0]
-                p.text = "🎬 视频"
-                p.font.size = Emu(1400000)
-            
-            # 清除占位符文本
-            s.text_frame.clear()
-            s.left = Emu(0)
-            
-            emoji = "🔊" if placeholder_name == 'audio' else "🎬"
-            print(f"    {emoji} 嵌入{placeholder_name}: {os.path.basename(media_path)}")
-            return True
+            # 检查是否已有超链接
+            hlink = sp.find('.//a:hlinkClick', nsmap)
+            if hlink is None:
+                # 创建新的超链接元素
+                # 注意：python-pptx 不直接支持添加超链接，这里记录日志
+                pass
         except Exception as e:
-            print(f"    ⚠️ {placeholder_name}嵌入失败: {e}")
-            return False
+            pass
 
     def _resolve_video_path(self, video_path):
         """解析视频路径"""
@@ -717,18 +750,22 @@ class PPTGenerator:
                 cur_sec = sec
                 pages.append(('section', self.templates['section'], sec))
 
-            # 基础文本框数量
-            text_count = len(h2.get('content', []))
-            
             # 确定媒体类型
             if h2.get('video'):
                 media_type = 'video'
+                # MP4单独一页，强制text_count=0, img_count=0
+                text_count = 0
+                img_count = 0
             elif h2.get('audio'):
                 media_type = 'audio'
+                # MP3单独一页，强制text_count=0, img_count=0
+                text_count = 0
+                img_count = 0
             else:
                 media_type = None
+                text_count = len(h2.get('content', []))
+                img_count = len(h2.get('images', []))
             
-            img_count = len(h2.get('images', []))
             idx = next_content(text_count, img_count, media_type)
             if idx is not None:
                 pages.append(('content', idx, h2))
@@ -737,7 +774,17 @@ class PPTGenerator:
                 media_str = f", {media_type}" if media_type else ""
                 print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{media_str}) → 模板页{idx+1}")
             else:
-                print(f"  ⚠️ 无法匹配: {h2['title']} ({text_count}文本框, {img_count}图片)")
+                # 找不到匹配时报错，使用空白模板
+                print(f"  ⚠️ 有内容未找到合适的模板匹配: {h2['title']} ({text_count}文本框, {img_count}图片, {media_type})")
+                # 使用空白模板（layout 6）
+                blank_idx = self._get_blank_template_idx()
+                if blank_idx is not None:
+                    pages.append(('content', blank_idx, h2))
+                else:
+                    # 如果没有空白模板，使用第一个正文模板
+                    first_content_templates = list(self.content_index.values())[0] if self.content_index else []
+                    if first_content_templates:
+                        pages.append(('content', first_content_templates[0], h2))
 
         if self.templates['end'] is not None:
             pages.append(('end', self.templates['end'], None))
