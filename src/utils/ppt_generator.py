@@ -16,7 +16,7 @@ from pptx.parts.slide import SlidePart
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.opc.packuri import PackURI
 from lxml import etree
-import re, copy, os
+import re, copy, os, subprocess
 from pypinyin import pinyin, Style
 
 NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
@@ -454,29 +454,11 @@ class PPTGenerator:
             if self._embed_media_file(slide, placeholder_name, s, local_path):
                 return True
         
-        # 无法嵌入时，显示图标+超链接
-        icon_text = f"{emoji} 点击播放" if is_online else emoji
-        
-        # 清除占位符并设置新文本
-        tf = s.text_frame
-        tf.clear()
-        p = tf.paragraphs[0]
-        p.text = icon_text
-        p.font.size = Emu(2400000)  # 24pt
-        p.font.bold = True
-        p.alignment = PP_ALIGN.CENTER
-        
-        # 设置文本框位置
-        s.width = Emu(3000000)  # 3cm
-        s.height = Emu(2000000)  # 2cm
-        
-        # 如果是在线链接，添加超链接
-        if is_online:
-            self._add_hyperlink_to_shape(s, media_path)
-            print(f"    {emoji} 已添加在线链接: {media_path}")
-        
-        print(f"    {emoji} 替换{placeholder_name}占位符: {icon_text}")
-        return True
+        # 无法嵌入时，清除占位符，不显示任何图标
+        s.text_frame.clear()
+        s.left = Emu(0)
+        print(f"    ⚠️ {placeholder_name}嵌入失败")
+        return False
 
     def _embed_media_from_url(self, slide, placeholder_name, shape, media_url):
         """从在线URL下载音视频并嵌入PPT"""
@@ -538,9 +520,35 @@ class PPTGenerator:
             
             emoji = "📢" if placeholder_name == 'audio' else "📺"
             
+            # 提取视频第一帧作为封面
+            poster_frame = None
+            if placeholder_name == 'video' and media_path.endswith('.mp4'):
+                try:
+                    import hashlib
+                    tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    video_hash = hashlib.md5(media_path.encode()).hexdigest()
+                    poster_path = os.path.join(tmp_dir, f"{video_hash}_poster.jpg")
+                    
+                    if not os.path.exists(poster_path):
+                        # 提取第一帧
+                        subprocess.run([
+                            'ffmpeg', '-i', media_path, 
+                            '-ss', '00:00:00.5',  # 从0.5秒开始，避免黑帧
+                            '-vframes', '1',
+                            '-q:v', '2',  # 高质量
+                            '-y', poster_path
+                        ], capture_output=True, timeout=30)
+                    
+                    if os.path.exists(poster_path) and os.path.getsize(poster_path) > 0:
+                        poster_frame = poster_path
+                        print(f"    📺 提取视频封面: {os.path.basename(poster_path)}")
+                except Exception as e:
+                    print(f"    ⚠️ 视频封面提取失败: {e}")
+            
             if placeholder_name == 'video':
-                # 视频使用 add_movie
-                movie = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
+                # 视频使用 add_movie，添加封面
+                movie = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=poster_frame)
                 movie.name = "视频"
                 print(f"    📺 嵌入视频: {os.path.basename(media_path)}")
             else:
