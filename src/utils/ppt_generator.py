@@ -825,6 +825,40 @@ class PPTGenerator:
         s.text_frame.clear(); s.left = Emu(0)
         return True
 
+    def _center_text(self, slide, name):
+        """将指定占位符的文本居中"""
+        ph = self._find_all_placeholders(slide)
+        if name not in ph:
+            return
+        s = ph[name]
+        # 设置文本框在页面中居中
+        slide_width = self.prs.slide_width
+        slide_height = self.prs.slide_height
+        # 计算居中位置
+        new_left = (slide_width - s.width) // 2
+        new_top = (slide_height - s.height) // 2
+        s.left = new_left
+        s.top = new_top
+        # 设置文本居中
+        for p in s.text_frame.paragraphs:
+            p.alignment = PP_ALIGN.CENTER
+
+    def _calculate_font_size(self, text_len, min_fs=24, max_fs=60):
+        """根据文本长度计算合适的字体大小"""
+        # 简单规则：文本越短字体越大
+        if text_len <= 10:
+            return max_fs  # 60pt
+        elif text_len <= 20:
+            return 48
+        elif text_len <= 40:
+            return 36
+        elif text_len <= 60:
+            return 28
+        elif text_len <= 100:
+            return 24
+        else:
+            return min_fs  # 24pt
+
     def _clear_unused(self, slide, used):
         for name, s in self._find_all_placeholders(slide).items():
             if name not in used:
@@ -834,15 +868,22 @@ class PPTGenerator:
 
     def _fill_slide(self, slide, typ, data, num):
         if typ == 'cover':
-            self._fill(slide, 'h0_0', data, 36)
+            # 封面标题：黑体，48pt，居中
+            self._fill(slide, 'h0_0', data, 48)
+            # 居中处理
+            self._center_text(slide, 'h0_0')
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'section':
-            self._fill(slide, 'h1_0', data, 32)
+            # 章节标题：黑体，66pt，居中
+            self._fill(slide, 'h1_0', data, 66)
+            # 居中处理
+            self._center_text(slide, 'h1_0')
             self._clear_unused(slide, ['h1_0'])
             print(f"  {num}. 章节: {data}")
         elif typ == 'content':
             used = ['h2_0']
+            # 三级标题：黑体，28pt，保持占位符位置
             self._fill(slide, 'h2_0', data['title'], 28)
             
             # 获取原始文本内容
@@ -888,9 +929,22 @@ class PPTGenerator:
                 else:
                     content_list.append(video_mark)
             
-            # 填充所有文本框
+            # 填充所有文本框 - 计算字体大小（24-60pt，多框时协调）
+            if not content_list:
+                fs = 24  # 默认字体大小
+            elif len(content_list) == 1:
+                # 单文本框：根据内容长度计算字体大小
+                text_len = len(content_list[0])
+                fs = self._calculate_font_size(text_len, min_fs=24, max_fs=60)
+            else:
+                # 多个文本框：计算平均字体大小，保持协调（不超过2号差异）
+                total_len = sum(len(t) for t in content_list)
+                avg_fs = self._calculate_font_size(total_len // len(content_list), min_fs=24, max_fs=60)
+                # 所有文本框使用相近的字体大小
+                fs = avg_fs
+            
             for j, t in enumerate(content_list):
-                self._fill(slide, f'h3_{j}', t, 20); used.append(f'h3_{j}')
+                self._fill(slide, f'h3_{j}', t, fs); used.append(f'h3_{j}')
             self._clear_unused(slide, used)
             
             # 替换图片
