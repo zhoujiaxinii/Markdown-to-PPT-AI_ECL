@@ -103,10 +103,12 @@ class MDParser:
             elif 'http' in line and '.mp3' not in line.lower() and '.mp4' not in line.lower():
                 current_content.append({'type': 'link', 'url': line})
             
-            # 普通文本（非空行）- 换行符保留在文本中，不作为分隔符
+            # 普通文本（非空行）
             elif line and not line.startswith('#'):
-                # 换行符 \n 保留在文本内容中，由PPT处理换行
-                current_content.append({'type': 'text', 'content': line})
+                # 去除换行符，保留纯文本内容
+                text = line.replace('\n', ' ').strip()
+                if text:
+                    current_content.append({'type': 'text', 'content': text})
         
         # 处理最后一个小节
         if current_h2:
