@@ -103,7 +103,8 @@ class MDParser:
         if current_h2:
             parsed_content = self._parse_content(current_content)
             result['h2'].append(self._create_h2_item(current_h2, parsed_content, current_h1))
-        elif current_h1:
+        # 无论是否有 H2，都需要添加最后的 H1
+        if current_h1:
             result['h1'].append(current_h1)
         
         return result

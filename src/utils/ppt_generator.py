@@ -638,10 +638,11 @@ class PPTGenerator:
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'toc':
-            # DEBUG removed
             for j, s in enumerate(data):
-                result = self._fill(slide, f'h1_{j}', s, 20)
-                # DEBUG removed
+                self._fill(slide, f'h1_{j}', s, 20)
+            # 清除未使用的目录占位符
+            used = [f'h1_{j}' for j in range(len(data))]
+            self._clear_unused(slide, used)
             print(f"  {num}. 目录: {len(data)}章")
         elif typ == 'section':
             self._fill(slide, 'h1_0', data, 32)
