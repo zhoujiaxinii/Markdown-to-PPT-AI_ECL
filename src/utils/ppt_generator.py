@@ -753,18 +753,14 @@ class PPTGenerator:
             # 确定媒体类型
             if h2.get('video'):
                 media_type = 'video'
-                # MP4单独一页，强制text_count=0, img_count=0
-                text_count = 0
-                img_count = 0
             elif h2.get('audio'):
                 media_type = 'audio'
-                # MP3单独一页，强制text_count=0, img_count=0
-                text_count = 0
-                img_count = 0
             else:
                 media_type = None
-                text_count = len(h2.get('content', []))
-                img_count = len(h2.get('images', []))
+            
+            # 文本框数量（包含音视频时保留文本框数量）
+            text_count = len(h2.get('content', []))
+            img_count = len(h2.get('images', []))
             
             idx = next_content(text_count, img_count, media_type)
             if idx is not None:
