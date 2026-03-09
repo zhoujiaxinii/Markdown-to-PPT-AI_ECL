@@ -903,9 +903,20 @@ class PPTGenerator:
             p.alignment = PP_ALIGN.CENTER
 
     def _clear_unused(self, slide, used):
+        """清除未使用的占位符（文本框和图片）"""
+        # 清除文本占位符
         for name, s in self._find_all_placeholders(slide).items():
             if name not in used:
-                s.text_frame.clear(); s.left = Emu(0)
+                s.text_frame.clear()
+                s.left = Emu(0)
+        
+        # 隐藏未使用的图片占位符（移到页面外）
+        pic_shapes = self._get_picture_shapes(slide)
+        for i, pic in enumerate(pic_shapes):
+            pic_name = f'p{i+1}'
+            if pic_name not in used:
+                # 隐藏图片
+                pic.left = Emu(-100000)
 
     # ── 填充单页 ─────────────────────────────────────────
 
