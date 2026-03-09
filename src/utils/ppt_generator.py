@@ -871,7 +871,7 @@ class PPTGenerator:
         return True
 
     def _center_text(self, slide, name):
-        """将指定占位符的文本居中"""
+        """将指定占位符的文本完全居中（垂直+水平）"""
         ph = self._find_all_placeholders(slide)
         if name not in ph:
             return
@@ -887,6 +887,20 @@ class PPTGenerator:
         # 设置文本居中
         for p in s.text_frame.paragraphs:
             p.alignment = PP_ALIGN.CENTER
+    
+    def _center_horizontal(self, slide, name):
+        """将指定占位符的文本水平居中，保留垂直位置"""
+        ph = self._find_all_placeholders(slide)
+        if name not in ph:
+            return
+        s = ph[name]
+        # 水平居中，垂直位置保持不变
+        slide_width = self.prs.slide_width
+        new_left = (slide_width - s.width) // 2
+        s.left = new_left
+        # 设置文本居中
+        for p in s.text_frame.paragraphs:
+            p.alignment = PP_ALIGN.CENTER
 
     def _clear_unused(self, slide, used):
         for name, s in self._find_all_placeholders(slide).items():
@@ -897,16 +911,16 @@ class PPTGenerator:
 
     def _fill_slide(self, slide, typ, data, num):
         if typ == 'cover':
-            # 封面标题：黑体，48pt，居中
+            # 封面标题：黑体，48pt，水平居中，垂直位置与模板一致
             self._fill(slide, 'h0_0', data, 48)
-            # 居中处理
-            self._center_text(slide, 'h0_0')
+            # 水平居中处理，垂直位置保持模板
+            self._center_horizontal(slide, 'h0_0')
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'section':
-            # 章节标题：黑体，66pt，居中
+            # 章节标题：黑体，66pt，完全居中（垂直+水平）
             self._fill(slide, 'h1_0', data, 66)
-            # 居中处理
+            # 完全居中处理
             self._center_text(slide, 'h1_0')
             self._clear_unused(slide, ['h1_0'])
             print(f"  {num}. 章节: {data}")
