@@ -91,6 +91,14 @@ class MDParser:
                 if match:
                     current_content.append({'type': 'audio', 'url': match.group(2).strip()})
             
+            # 匹配纯视频链接 - https://xxx.mp4 或 http://xxx.mp4
+            elif re.search(r'https?://.+\.mp4(\?.*)?$', line, re.I):
+                current_content.append({'type': 'video', 'url': line.strip()})
+            
+            # 匹配纯音频链接 - https://xxx.mp3 或 http://xxx.mp3
+            elif re.search(r'https?://.+\.mp3(\?.*)?$', line, re.I):
+                current_content.append({'type': 'audio', 'url': line.strip()})
+            
             # 匹配其他链接（非音视频）
             elif 'http' in line and '.mp3' not in line.lower() and '.mp4' not in line.lower():
                 current_content.append({'type': 'link', 'url': line})
