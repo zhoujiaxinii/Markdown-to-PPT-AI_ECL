@@ -227,10 +227,9 @@ class PPTGenerator:
 
     def _replace_image(self, slide, pic_shape, image_path):
         """替换幻灯片中的一个图片，保持原位置和尺寸"""
-        # 在线图片URL - 暂不支持下载，使用占位符
+        # 在线图片URL - 下载并替换
         if image_path.startswith('http://') or image_path.startswith('https://'):
-            print(f"    ⏭️ 在线图片暂不下载: {image_path[:50]}...")
-            return True  # 跳过但不报错
+            return self._replace_image_from_url(slide, pic_shape, image_path)
         
         # 解析本地图片路径
         abs_path = self._resolve_image_path(image_path)
@@ -251,6 +250,54 @@ class PPTGenerator:
         # 在相同位置添加新图片
         slide.shapes.add_picture(abs_path, left, top, width, height)
         return True
+
+    def _replace_image_from_url(self, slide, pic_shape, image_url):
+        """从在线URL下载并替换图片"""
+        import urllib.request
+        import tempfile
+        import shutil
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_images')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            import hashlib
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()
+            ext = os.path.splitext(image_url.split('?')[0])[-1] or '.jpg'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载图片（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                # 设置请求头模拟浏览器
+                req = urllib.request.Request(
+                    image_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+                print(f"    📷 下载图片: {image_url[:40]}...")
+            
+            # 获取原图的位置和尺寸
+            left = pic_shape.left
+            top = pic_shape.top
+            width = pic_shape.width
+            height = pic_shape.height
+
+            # 删除原图片 shape
+            sp_elem = pic_shape._element
+            sp_elem.getparent().remove(sp_elem)
+
+            # 在相同位置添加新图片
+            slide.shapes.add_picture(tmp_path, left, top, width, height)
+            
+            print(f"    📷 替换图片成功: {image_url[:40]}...")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 在线图片下载失败: {image_url[:40]}... 错误: {e}")
+            return False
 
     def _resolve_image_path(self, image_path):
         """解析图片路径：支持绝对路径、相对于MD文件的路径"""
