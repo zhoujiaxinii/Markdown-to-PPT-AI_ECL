@@ -638,8 +638,14 @@ class PPTGenerator:
             self._clear_unused(slide, ['h0_0'])
             print(f"  {num}. 封面: {data}")
         elif typ == 'toc':
-            for j, s in enumerate(data):
-                self._fill(slide, f'h1_{j}', s, 20)
+            # 目录页直接填充文本，不使用拼音表
+            ph = self._find_all_placeholders(slide)
+            for j, title in enumerate(data):
+                key = f'h1_{j}'
+                if key in ph:
+                    s = ph[key]
+                    s.text_frame.clear()
+                    s.text_frame.paragraphs[0].text = title
             # 清除未使用的目录占位符
             used = [f'h1_{j}' for j in range(len(data))]
             self._clear_unused(slide, used)
