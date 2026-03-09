@@ -730,13 +730,24 @@ class PPTGenerator:
     # ── 拼音表格 ─────────────────────────────────────────
 
     def _parse_pinyin(self, text):
+        """解析文本为拼音和汉字列表，支持换行符"""
         py_list, ch_list = [], []
-        for c in text:
-            if '\u4e00' <= c <= '\u9fff':
-                py = pinyin(c, style=Style.TONE)[0][0]
-                py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
-            elif c.strip():
-                py_list.append(''); ch_list.append(c)
+        
+        # 按换行符分割处理每一行
+        lines = text.split('\n')
+        
+        for line in lines:
+            for c in line:
+                if '\u4e00' <= c <= '\u9fff':
+                    py = pinyin(c, style=Style.TONE)[0][0]
+                    py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
+                elif c.strip():
+                    py_list.append(''); ch_list.append(c)
+            
+            # 如果不是最后一行，添加换行符
+            if line != lines[-1]:
+                py_list.append('\n'); ch_list.append('\n')
+        
         return py_list, ch_list
 
     def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24):
@@ -757,7 +768,7 @@ class PPTGenerator:
         for ci, (p, c) in enumerate(zip(py_list, ch_list)):
             for ri, txt in enumerate([p, c]):
                 cell = tbl.cell(ri, ci)
-                cell.text = txt; cell.text_frame.word_wrap = False
+                cell.text = txt; cell.text_frame.word_wrap = True  # 允许自动换行
                 pa = cell.text_frame.paragraphs[0]
                 pa.font.size = Pt(fs)
                 pa.font.name = 'Arial' if ri == 0 else 'SimSun'
