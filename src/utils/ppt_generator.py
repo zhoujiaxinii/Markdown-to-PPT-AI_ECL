@@ -854,22 +854,6 @@ class PPTGenerator:
         for p in s.text_frame.paragraphs:
             p.alignment = PP_ALIGN.CENTER
 
-    def _calculate_font_size(self, text_len, min_fs=24, max_fs=60):
-        """根据文本长度计算合适的字体大小"""
-        # 简单规则：文本越短字体越大
-        if text_len <= 10:
-            return max_fs  # 60pt
-        elif text_len <= 20:
-            return 48
-        elif text_len <= 40:
-            return 36
-        elif text_len <= 60:
-            return 28
-        elif text_len <= 100:
-            return 24
-        else:
-            return min_fs  # 24pt
-
     def _clear_unused(self, slide, used):
         for name, s in self._find_all_placeholders(slide).items():
             if name not in used:
@@ -940,19 +924,21 @@ class PPTGenerator:
                 else:
                     content_list.append(video_mark)
             
-            # 填充所有文本框 - 计算字体大小（24-60pt，多框时协调）
+            # 填充所有文本框 - 字体大小24-48pt，同一页多框时一致
             if not content_list:
-                fs = 24  # 默认字体大小
-            elif len(content_list) == 1:
-                # 单文本框：根据内容长度计算字体大小
-                text_len = len(content_list[0])
-                fs = self._calculate_font_size(text_len, min_fs=24, max_fs=60)
+                fs = 24
             else:
-                # 多个文本框：计算平均字体大小，保持协调（不超过2号差异）
-                total_len = sum(len(t) for t in content_list)
-                avg_fs = self._calculate_font_size(total_len // len(content_list), min_fs=24, max_fs=60)
-                # 所有文本框使用相近的字体大小
-                fs = avg_fs
+                # 根据文本框数量选择字体大小
+                # 1框: 48pt, 2框: 36pt, 3框: 30pt, 4框: 24pt
+                box_count = len(content_list)
+                if box_count == 1:
+                    fs = 48
+                elif box_count == 2:
+                    fs = 36
+                elif box_count == 3:
+                    fs = 30
+                else:
+                    fs = 24
             
             for j, t in enumerate(content_list):
                 self._fill(slide, f'h3_{j}', t, fs); used.append(f'h3_{j}')
