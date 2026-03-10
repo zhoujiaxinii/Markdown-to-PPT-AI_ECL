@@ -719,17 +719,14 @@ class PPTGenerator:
             return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs)
         else:
             # 多行：创建多个垂直排列的表格
-            # 使用浮点数计算，避免整数除法导致的累积误差
-            row_count = len([l for l in lines if l.strip()])  # 有效行数
+            valid_lines = [l for l in lines if l.strip()]
+            row_count = len(valid_lines)
             if row_count == 0: return None
             
-            # 每行高度 = 总高度 / 行数
-            row_height = height / row_count
-            row_margin = int(height * 0.02)  # 添加2%边距防止重叠
-            actual_row_height = row_height - row_margin
+            # 每行高度 = 总高度 / 有效行数，确保每行都有足够的空间
+            row_height = int(height / row_count)
             
             current_top = top
-            valid_lines = [l for l in lines if l.strip()]
             
             for i, line in enumerate(valid_lines):
                 py_list, ch_list = self._parse_pinyin(line)
@@ -737,7 +734,10 @@ class PPTGenerator:
                     current_top += row_height
                     continue
                 
-                self._create_single_pinyin_table(slide, left, current_top, width, actual_row_height, py_list, ch_list, fs)
+                # 每行使用固定的行高，最后一行可能稍微大一点以填满剩余空间
+                actual_height = row_height if i < row_count - 1 else height - current_top + top
+                
+                self._create_single_pinyin_table(slide, left, current_top, width, actual_height, py_list, ch_list, fs)
                 current_top += row_height
             
             return None
@@ -761,14 +761,18 @@ class PPTGenerator:
         col_count = max(len(valid_ch), 1)
         if not cw: cw = [width]
         
+        # 表格实际高度使用传入的完整height，不分割
         tbl_shape = slide.shapes.add_table(2, col_count, left, top, int(tw), height)
         tbl = tbl_shape.table
         
         for i, w in enumerate(cw[:col_count]): 
             tbl.columns[i].width = int(w)
         
-        tbl.rows[0].height = int(height * 0.45)
-        tbl.rows[1].height = int(height * 0.55)
+        # 两行高度加起来要等于总高度
+        row1_height = int(height * 0.45)
+        row2_height = height - row1_height
+        tbl.rows[0].height = row1_height
+        tbl.rows[1].height = row2_height
         
         for ci in range(col_count):
             if ci < len(valid_py) and ci < len(valid_ch):
