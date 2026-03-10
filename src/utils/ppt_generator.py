@@ -761,8 +761,12 @@ class PPTGenerator:
         col_count = max(len(valid_ch), 1)
         if not cw: cw = [width]
         
+        # 计算表格在占位符内的居中位置
+        center_left = left + (width - int(tw)) // 2
+        center_top = top + (height - height) // 2  # 高度不变，保持顶部对齐
+        
         # 表格实际高度使用传入的完整height，不分割
-        tbl_shape = slide.shapes.add_table(2, col_count, left, top, int(tw), height)
+        tbl_shape = slide.shapes.add_table(2, col_count, center_left, top, int(tw), height)
         tbl = tbl_shape.table
         
         for i, w in enumerate(cw[:col_count]): 
