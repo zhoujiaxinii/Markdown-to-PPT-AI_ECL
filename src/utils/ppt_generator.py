@@ -509,6 +509,8 @@ class PPTGenerator:
                     # 将音频嵌入到占位符位置
                     audio = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
                     audio.name = "音频"
+                    # 隐藏音频图标（移到页面外），只保留文字
+                    audio.left = Emu(-10000)
                     audio_embedded = True
                     print(f"    📢 嵌入音频: {os.path.basename(media_path)}")
                 except Exception as e:
