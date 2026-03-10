@@ -103,12 +103,12 @@ class MDParser:
             elif 'http' in line and '.mp3' not in line.lower() and '.mp4' not in line.lower():
                 current_content.append({'type': 'link', 'url': line})
             
-            # 普通文本（非空行）- 保留换行符
+            # 普通文本（非空行）- 只有||是分隔符，换行/空格/空行合并到一个文本框
             elif line and not line.startswith('#'):
-                # 保留换行符 \n，在文本框内实现换行
+                # 去除首尾空格，保留换行符\n在文本中
                 text = line.strip()
                 if text:
-                    # 如果上一个也是文本，追加到一起（用换行符分隔）
+                    # 所有文本都追加到同一个文本框（换行符保留在文本中）
                     if current_content and current_content[-1]['type'] == 'text':
                         current_content[-1]['content'] = current_content[-1]['content'] + '\n' + text
                     else:
