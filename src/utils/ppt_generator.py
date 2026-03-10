@@ -653,7 +653,7 @@ class PPTGenerator:
             
             # 添加链接文本
             p = s.text_frame.paragraphs[0]
-            p.text = "🔗 点击打开链接"
+            p.text = "🔗 点击打开游戏链接进行游玩"
             p.font.size = Pt(18)
             p.font.name = 'SimHei'
             p.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
@@ -670,7 +670,7 @@ class PPTGenerator:
             # 失败时显示文本
             s.text_frame.clear()
             p = s.text_frame.paragraphs[0]
-            p.text = f"🔗 {link_url[:30]}..."
+            p.text = f"🔗 点击打开游戏链接进行游玩: {link_url[:20]}..."
             p.font.size = Pt(14)
             p.font.name = 'SimHei'
             p.alignment = PP_ALIGN.CENTER
