@@ -768,6 +768,11 @@ class PPTGenerator:
                     cell = tbl.cell(ri, ci)
                     cell.text = txt if txt else ''
                     cell.text_frame.word_wrap = True
+                    # 设置单元格边距为0（无边距）
+                    cell.text_frame.margin_top = 0
+                    cell.text_frame.margin_bottom = 0
+                    cell.text_frame.margin_left = 0
+                    cell.text_frame.margin_right = 0
                     pa = cell.text_frame.paragraphs[0]
                     pa.font.size = Pt(fs)
                     pa.font.name = 'SimHei'
