@@ -95,83 +95,26 @@ class PPTGenerator:
 
     # ── 模板匹配 ──────────────────────────────────────────
 
-    def _get_blank_template_idx(self):
-        """获取空白模板页的索引"""
-        for idx, slide in enumerate(self.prs.slides):
-            # 检查是否是空白页（没有文本占位符）
-            ph = self._find_all_placeholders(slide)
-            # 如果没有任何文本占位符，认为是空白页
-            if not ph:
-                return idx
-        return None
-
+    
     def _match_content_template(self, text_count, image_count, media_type=None):
         """
-        匹配正文模板：优先精确匹配 (文本框数, 图片数, 媒体类型)
-        降级策略：
-        1. 精确匹配 (text_count, image_count, media_type)
-        2. 同媒体类型，同文本框数，图片数 >= image_count 的最小值
-        3. 同媒体类型，文本框数 >= text_count，图片数 >= image_count 的最小组合
-        4. 同媒体类型，仅按文本框数匹配（忽略图片数）
-        5. 忽略媒体类型，精确匹配 (text_count, image_count)
-        6. 忽略媒体类型，按文本框数匹配
-        7. 任意可用模板
+        匹配正文模板：精确匹配 (文本框数, 图片数, 媒体类型)
+        找不到精确匹配时返回空列表，由调用方处理智能生成
         """
         tc = min(text_count, 4)
         ic = image_count
 
-        # 1. 精确匹配 (包含媒体类型)
+        # 精确匹配 (文本框数, 图片数, 媒体类型)
         if (tc, ic, media_type) in self.content_index:
             return self.content_index[(tc, ic, media_type)]
 
-        # 2. 同媒体类型，同文本框数，图片数 >= ic
-        if media_type:
-            candidates = [(k, v) for k, v in self.content_index.items() 
-                         if k[0] == tc and k[1] >= ic and k[2] == media_type]
-            if candidates:
-                candidates.sort(key=lambda x: x[0][1])
-                return candidates[0][1]
+        # 精确匹配 (文本框数, 图片数)，忽略媒体类型
+        if (tc, ic, None) in self.content_index:
+            return self.content_index[(tc, ic, None)]
 
-        # 3. 同媒体类型，文本框数 >= tc，图片数 >= ic
-        if media_type:
-            candidates = [(k, v) for k, v in self.content_index.items() 
-                         if k[0] >= tc and k[1] >= ic and k[2] == media_type]
-            if candidates:
-                candidates.sort(key=lambda x: (x[0][0], x[0][1]))
-                return candidates[0][1]
-
-        # 4. 同媒体类型，仅按文本框数匹配
-        if media_type:
-            candidates = [(k, v) for k, v in self.content_index.items() 
-                         if k[0] == tc and k[2] == media_type]
-            if candidates:
-                candidates.sort(key=lambda x: x[0][1])
-                return candidates[0][1]
-
-        # 5. 忽略媒体类型，精确匹配
-        candidates = [(k, v) for k, v in self.content_index.items() 
-                     if k[0] == tc and k[1] == ic]
-        if candidates:
-            return candidates[0][1]
-
-        # 6. 忽略媒体类型，按文本框数匹配
-        candidates = [(k, v) for k, v in self.content_index.items() if k[0] == tc]
-        if candidates:
-            candidates.sort(key=lambda x: x[0][1])
-            return candidates[0][1]
-
-        # 7. 文本框数 >= tc
-        candidates = [(k, v) for k, v in self.content_index.items() if k[0] >= tc]
-        if candidates:
-            candidates.sort(key=lambda x: (x[0][0], x[0][1]))
-            return candidates[0][1]
-
-        # 8. 任意可用
-        if self.content_index:
-            return list(self.content_index.values())[0]
-
-        return None
-
+        # 无匹配
+        return []
+    
     # ── 幻灯片XML深拷贝 ──────────────────────────────────
 
     def _clone_slide(self, source_idx):
@@ -986,6 +929,24 @@ class PPTGenerator:
                 else:
                     content_list.append(video_mark)
             
+            # 模板不足时，在左上角添加提示
+            if data.get('need_auto_gen') and data.get('template_hint'):
+                hint_text = data['template_hint']
+                # 在左上角添加提示文本框
+                left = Emu(100000)  # 1cm
+                top = Emu(200000)   # 2cm
+                width = Emu(8000000)  # 8cm
+                height = Emu(500000)  # 0.5cm
+                tx_box = slide.shapes.add_textbox(left, top, width, height)
+                tf = tx_box.text_frame
+                p = tf.paragraphs[0]
+                p.text = hint_text
+                p.font.size = Pt(12)
+                p.font.name = 'SimHei'
+                p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+                p.alignment = PP_ALIGN.LEFT
+                used.append('hint')
+            
             # 填充所有文本框 - 字体大小24-48pt，同一页多框时一致
             if not content_list:
                 fs = 24
@@ -1086,17 +1047,15 @@ class PPTGenerator:
                 media_str = f", {media_type}" if media_type else ""
                 print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{media_str}) → 模板页{idx+1}")
             else:
-                # 找不到匹配时报错，使用空白模板
-                print(f"  ⚠️ 有内容未找到合适的模板匹配: {h2['title']} ({text_count}文本框, {img_count}图片, {media_type})")
-                # 使用空白模板（layout 6）
-                blank_idx = self._get_blank_template_idx()
-                if blank_idx is not None:
-                    pages.append(('content', blank_idx, h2))
-                else:
-                    # 如果没有空白模板，使用第一个正文模板
-                    first_content_templates = list(self.content_index.values())[0] if self.content_index else []
-                    if first_content_templates:
-                        pages.append(('content', first_content_templates[0], h2))
+                # 找不到精确匹配时，标记需要智能生成
+                print(f"  ⚠️ 模板不足，需要补充{text_count}文本框{img_count}图片的模板: {h2['title']}")
+                # 标记该页需要智能生成
+                h2['need_auto_gen'] = True
+                h2['template_hint'] = f"模版不足，需要补充{text_count}文本框{img_count}图片的模版"
+                # 使用第一个正文模板作为基础
+                first_content_templates = list(self.content_index.values())[0] if self.content_index else []
+                if first_content_templates:
+                    pages.append(('content', first_content_templates[0], h2))
 
         if self.templates['end'] is not None:
             pages.append(('end', self.templates['end'], None))
