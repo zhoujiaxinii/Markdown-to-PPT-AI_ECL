@@ -134,16 +134,18 @@ class MDParser:
             'images': parsed_content['images'],
             'video': parsed_content['video'],
             'audio': parsed_content['audio'],
+            'link': parsed_content.get('link'),  # 新增：链接
             'char_count': char_count,
             'word_limit_tip': self.get_word_limit_tip(char_count, len(parsed_content['texts']))
         }
     
     def _parse_content(self, content_list):
-        """解析内容列表，提取文本、图片、视频、音频"""
+        """解析内容列表，提取文本、图片、视频、音频、链接"""
         texts = []
         images = []
         video = None
         audio = None
+        link = None
         total_char_count = 0
         
         for item in content_list:
@@ -168,12 +170,15 @@ class MDParser:
                 video = item['url']
             elif item['type'] == 'audio':
                 audio = item['url']
+            elif item['type'] == 'link':
+                link = item['url']
         
         return {
             'texts': texts,
             'images': images,
             'video': video,
             'audio': audio,
+            'link': link,
             'char_count': total_char_count
         }
     

@@ -48,17 +48,18 @@ class PPTGenerator:
             'cover': None, 'section': None, 'end': None,
         }
         # 三维索引：(h3_count, img_count, media_type) -> [模板页索引列表]
-        # media_type: None=无, 'audio'=有音频, 'video'=有视频
+        # media_type: None=无, 'audio'=有音频, 'video'=有视频, 'link'=有链接
         self.content_index = {}
 
         for idx, slide in enumerate(self.prs.slides):
             ph = self._find_all_placeholders(slide)
             img_count = self._count_images(slide)
             
-            # 检测是否有 audio/video 占位符（ph是字典，键是占位符名称）
+            # 检测是否有 audio/video/link 占位符（ph是字典，键是占位符名称）
             has_audio = 'audio' in ph
             has_video = 'video' in ph
-            media_type = 'video' if has_video else ('audio' if has_audio else None)
+            has_link = 'link' in ph
+            media_type = 'video' if has_video else ('audio' if has_audio else ('link' if has_link else None))
 
             # 结束页
             if any('谢' in s.text_frame.text or 'xiè' in s.text_frame.text.lower()
@@ -631,6 +632,51 @@ class PPTGenerator:
                 return candidate
         return None
 
+    def _embed_link(self, slide, link_url):
+        """
+        在幻灯片中添加可点击的链接（点击后在浏览器中打开）
+        """
+        if not link_url:
+            return False
+        
+        # 找到 {{link}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'link' not in ph:
+            print(f"    ⚠️ 未找到 {{link}} 占位符")
+            return False
+        
+        s = ph['link']
+        
+        try:
+            # 清除占位符内容
+            s.text_frame.clear()
+            
+            # 添加链接文本
+            p = s.text_frame.paragraphs[0]
+            p.text = "🔗 点击打开链接"
+            p.font.size = Pt(18)
+            p.font.name = 'SimHei'
+            p.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
+            p.alignment = PP_ALIGN.CENTER
+            s.text_frame.word_wrap = True
+            
+            # 添加超链接
+            hlink = s.text_frame.paragraphs[0].add_hyperlink()
+            hlink.address = link_url
+            
+            print(f"    🔗 嵌入链接: {link_url[:40]}...")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 链接嵌入失败: {e}")
+            # 失败时显示文本
+            s.text_frame.clear()
+            p = s.text_frame.paragraphs[0]
+            p.text = f"🔗 {link_url[:20]}..."
+            p.font.size = Pt(14)
+            p.font.name = 'SimHei'
+            p.alignment = PP_ALIGN.CENTER
+            return False
+
     def _embed_audio_on_slide(self, slide, audio_path):
         """
         在幻灯片中嵌入音频
@@ -1055,12 +1101,18 @@ class PPTGenerator:
             # 获取原始文本内容
             content_list = list(data.get('content', []))
             
-            # 获取音视频文件
+            # 获取音视频文件和链接
             audio = data.get('audio')
             video = data.get('video')
+            link = data.get('link')  # 新增：获取链接
             
-            # 检查模板是否有 {{audio}} 或 {{video}} 占位符
+            # 检查模板是否有 {{audio}}、{{video}} 或 {{link}} 占位符
             ph = self._find_all_placeholders(slide)
+            
+            # 尝试嵌入链接（需要在音频和视频之前处理，因为可能匹配到link模板）
+            link_embedded = False
+            if link and 'link' in ph:
+                link_embedded = self._embed_link(slide, link)
             
             # 尝试嵌入音频到占位符
             audio_embedded = False
@@ -1193,11 +1245,13 @@ class PPTGenerator:
                 cur_sec = sec
                 pages.append(('section', self.templates['section'], sec))
 
-            # 确定媒体类型
+            # 确定媒体类型（video > audio > link > None）
             if h2.get('video'):
                 media_type = 'video'
             elif h2.get('audio'):
                 media_type = 'audio'
+            elif h2.get('link'):
+                media_type = 'link'
             else:
                 media_type = None
             
