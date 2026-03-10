@@ -828,10 +828,60 @@ class PPTGenerator:
             if s.shape_type == 6:  # GROUP
                 self._find_placeholders_recursive(s.shapes, ph, path + 'G/')
 
+    def _adjust_font_size_to_fit(self, s, content, fs):
+        """
+        自动调整字体大小，确保文本能放入文本框
+        如果文本超出文本框范围，逐步减小字体大小直到刚好能放下
+        """
+        # 估算文本框能容纳的字符数
+        # 中文字符宽度约 0.6 倍字体高度，英文约 0.5 倍
+        # 行高约 1.2 倍字体高度
+        width_emu = s.width
+        height_emu = s.height
+        
+        # 转换为 pt (1pt = 12700 emu)
+        width_pt = width_emu / 12700
+        height_pt = height_emu / 12700
+        
+        # 估算每行能容纳的字符数（考虑中英文混合）
+        # 中文字符宽约 1em，英文约 0.5em，假设50%中文
+        char_width_factor = 0.6  # 平均字符宽度因子
+        chars_per_line = int(width_pt / (fs * char_width_factor))
+        
+        # 估算能容纳的行数
+        line_height_factor = 1.2  # 行高因子
+        max_lines = int(height_pt / (fs * line_height_factor))
+        
+        # 计算能容纳的总字符数
+        max_chars = chars_per_line * max_lines
+        
+        # 检查是否需要调整字体大小
+        actual_chars = len(content)
+        
+        if actual_chars <= max_chars:
+            return fs  # 不需要调整
+        
+        # 需要调整：逐步减小字体大小
+        min_fs = 8  # 最小字体 8pt
+        new_fs = fs
+        
+        while new_fs > min_fs and actual_chars > max_chars:
+            new_fs -= 2  # 每次减小 2pt
+            
+            # 重新估算
+            chars_per_line = int(width_pt / (new_fs * char_width_factor))
+            max_lines = int(height_pt / (new_fs * line_height_factor))
+            max_chars = chars_per_line * max_lines
+        
+        return new_fs if new_fs >= min_fs else min_fs
+    
     def _fill(self, slide, name, content, fs=24):
         ph = self._find_all_placeholders(slide)
         if name not in ph: return False
         s = ph[name]
+        
+        # 自动调整字体大小，确保文本能放入文本框
+        fs = self._adjust_font_size_to_fit(s, content, fs)
         
         # 检查是否包含汉字
         has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
