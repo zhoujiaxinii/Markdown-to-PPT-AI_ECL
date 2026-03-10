@@ -892,42 +892,10 @@ class PPTGenerator:
         has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
         
         if has_chinese:
-            # 有汉字：分离中文和英文，中文用拼音表格，英文用文本框
-            # 提取纯中文部分（用于拼音表格）
-            chinese_only = ''.join(c for c in content if '\u4e00' <= c <= '\u9fff' or c == '\n')
-            # 提取非中文部分（英文、数字、标点等）
-            english_parts = []
-            current_english = ''
-            for c in content:
-                if '\u4e00' <= c <= '\u9fff':
-                    if current_english.strip():
-                        english_parts.append(current_english.strip())
-                    current_english = ''
-                else:
-                    current_english += c
-            if current_english.strip():
-                english_parts.append(current_english.strip())
-            
-            # 先处理中文部分的拼音表格
-            if chinese_only.strip():
-                self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, chinese_only, fs)
-            
-            # 再添加英文文本（如果有多段英文，分散放置）
-            if english_parts:
-                # 英文放到拼音表格下方或右侧
-                # 这里简化为直接添加到文本框
-                s.text_frame.clear()
-                for i, part in enumerate(english_parts):
-                    if i == 0:
-                        s.text_frame.paragraphs[0].text = part
-                    else:
-                        p = s.text_frame.add_paragraph()
-                        p.text = part
-                    s.text_frame.paragraphs[i].font.size = Pt(fs)
-                    s.text_frame.paragraphs[i].font.name = 'Arial'  # 英文用Arial
-                    s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
+            # 有汉字：用拼音表格处理（支持换行）
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
         else:
-            # 无汉字（纯英文）：直接设置文本框内容，保留换行符
+            # 无汉字（英文）：直接设置文本框内容，保留换行符
             s.text_frame.clear()
             
             # 检查是否有手动换行符
