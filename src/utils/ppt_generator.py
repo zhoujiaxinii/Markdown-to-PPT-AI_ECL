@@ -502,17 +502,40 @@ class PPTGenerator:
                 movie.name = "视频"
                 print(f"    📺 嵌入视频: {os.path.basename(media_path)}")
             else:
-                # 音频使用 add_movie（python-pptx不支持add_audio）
+                # 音频嵌入：先尝试使用 add_movie
+                audio_embedded = False
                 try:
                     audio = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
                     audio.name = "音频"
+                    audio_embedded = True
                     print(f"    📢 嵌入音频: {os.path.basename(media_path)}")
                 except Exception as e:
-                    print(f"    ⚠️ 音频嵌入失败: {e}")
-                    return False
+                    print(f"    ⚠️ add_movie嵌入音频失败: {e}")
+                
+                # 如果嵌入成功，在占位符位置添加一个可见的喇叭图标（文本框）
+                if audio_embedded:
+                    # 清除占位符文本
+                    shape.text_frame.clear()
+                    
+                    # 添加一个显示"🔊 点击播放"的文本框作为喇叭图标
+                    p = shape.text_frame.paragraphs[0]
+                    p.text = "🔊 点击播放音频"
+                    p.font.size = Pt(18)
+                    p.font.name = 'SimHei'
+                    p.font.color.rgb = RGBColor(0, 128, 0)  # 绿色
+                    p.alignment = PP_ALIGN.CENTER
+                    shape.text_frame.word_wrap = True
+                else:
+                    # 嵌入失败，显示错误信息
+                    p = shape.text_frame.paragraphs[0]
+                    p.text = "【⚠️ 音频嵌入失败】"
+                    p.font.size = Pt(18)
+                    p.font.name = 'SimHei'
+                    p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+                    p.alignment = PP_ALIGN.CENTER
             
-            # 清除占位符
-            shape.text_frame.clear()
+            # 清除占位符（如果还没清除）
+            # shape.text_frame.clear()  # 注释掉，因为上面已经处理了
             
             return True
         except Exception as e:
