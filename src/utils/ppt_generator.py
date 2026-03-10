@@ -503,9 +503,10 @@ class PPTGenerator:
                 movie.name = "视频"
                 print(f"    📺 嵌入视频: {os.path.basename(media_path)}")
             else:
-                # 音频嵌入：先尝试使用 add_movie
+                # 音频嵌入：使用 add_movie 嵌入到占位符位置
                 audio_embedded = False
                 try:
+                    # 将音频嵌入到占位符位置
                     audio = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
                     audio.name = "音频"
                     audio_embedded = True
@@ -513,12 +514,12 @@ class PPTGenerator:
                 except Exception as e:
                     print(f"    ⚠️ add_movie嵌入音频失败: {e}")
                 
-                # 如果嵌入成功，在占位符位置添加一个可见的喇叭图标（文本框）
+                # 在占位符位置显示文字
                 if audio_embedded:
                     # 清除占位符文本
                     shape.text_frame.clear()
                     
-                    # 添加一个显示"🔊 点击播放"的文本框作为喇叭图标
+                    # 添加显示"🔊 点击播放音频"的文本
                     p = shape.text_frame.paragraphs[0]
                     p.text = "🔊 点击播放音频"
                     p.font.size = Pt(18)
