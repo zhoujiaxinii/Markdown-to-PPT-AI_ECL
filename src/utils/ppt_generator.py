@@ -1224,13 +1224,28 @@ class PPTGenerator:
                 used.append('hint')
             
             # 填充所有文本框 - 字体大小24-40pt，同一页多框时一致
+            # 先获取图片列表（用于判断是否无图片）
+            images = data.get('images', [])
+            
             if not content_list:
                 fs = 24
             else:
                 # 根据文本框数量选择字体大小
                 # 1框: 40pt, 2框: 36pt, 3框: 30pt, 4框: 24pt
                 box_count = len(content_list)
-                if box_count == 1:
+                
+                # 检查是否满足字号28的条件：
+                # 1. 只有1或2个文本框
+                # 2. 没有图片
+                # 3. 文本框内中文字符数超过10个
+                chinese_count = 0
+                for t in content_list:
+                    chinese_count += sum(1 for c in t if '\u4e00' <= c <= '\u9fff')
+                
+                if box_count in [1, 2] and not images and chinese_count > 10:
+                    # 满足条件：1-2个文本框，无图片，中文>10
+                    fs = 28
+                elif box_count == 1:
                     fs = 40
                 elif box_count == 2:
                     fs = 36
@@ -1244,7 +1259,6 @@ class PPTGenerator:
             self._clear_unused(slide, used)
             
             # 替换图片
-            images = data.get('images', [])
             if images:
                 # 记录已替换的图片数量
                 replaced_count = self._replace_images_on_slide(slide, images)
