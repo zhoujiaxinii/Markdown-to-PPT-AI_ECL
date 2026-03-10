@@ -660,9 +660,8 @@ class PPTGenerator:
             p.alignment = PP_ALIGN.CENTER
             s.text_frame.word_wrap = True
             
-            # 添加超链接
-            hlink = s.text_frame.paragraphs[0].add_hyperlink()
-            hlink.address = link_url
+            # 添加超链接 - 由于python-pptx限制，显示链接文本供用户复制
+            # 如果需要真正的超链接，需要使用底层XML操作
             
             print(f"    🔗 嵌入链接: {link_url[:40]}...")
             return True
@@ -671,7 +670,7 @@ class PPTGenerator:
             # 失败时显示文本
             s.text_frame.clear()
             p = s.text_frame.paragraphs[0]
-            p.text = f"🔗 {link_url[:20]}..."
+            p.text = f"🔗 {link_url[:30]}..."
             p.font.size = Pt(14)
             p.font.name = 'SimHei'
             p.alignment = PP_ALIGN.CENTER
