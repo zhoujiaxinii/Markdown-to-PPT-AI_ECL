@@ -723,8 +723,9 @@ class PPTGenerator:
             row_count = len(valid_lines)
             if row_count == 0: return None
             
-            # 每行高度 = 总高度 / 有效行数，确保每行都有足够的空间
-            row_height = int(height / row_count)
+            # 计算每行高度，确保能放下所有行
+            # 预留10%边距防止重叠
+            row_height = int(height / row_count * 0.9)
             
             current_top = top
             
@@ -734,11 +735,10 @@ class PPTGenerator:
                     current_top += row_height
                     continue
                 
-                # 每行使用固定的行高，最后一行可能稍微大一点以填满剩余空间
-                actual_height = row_height if i < row_count - 1 else height - current_top + top
-                
-                self._create_single_pinyin_table(slide, left, current_top, width, actual_height, py_list, ch_list, fs)
-                current_top += row_height
+                # 每行使用固定行高
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs)
+                # 下一个表格的顶部位置
+                current_top = top + int((i + 1) * height / row_count)
             
             return None
     
