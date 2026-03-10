@@ -514,21 +514,8 @@ class PPTGenerator:
                 except Exception as e:
                     print(f"    ⚠️ add_movie嵌入音频失败: {e}")
                 
-                # 在占位符位置显示文字
-                if audio_embedded:
-                    # 清除占位符文本
-                    shape.text_frame.clear()
-                    
-                    # 添加显示"🔊 点击播放音频"的文本
-                    p = shape.text_frame.paragraphs[0]
-                    p.text = "🔊 点击播放音频"
-                    p.font.size = Pt(18)
-                    p.font.name = 'SimHei'
-                    p.font.color.rgb = RGBColor(0, 128, 0)  # 绿色
-                    p.alignment = PP_ALIGN.CENTER
-                    shape.text_frame.word_wrap = True
-                else:
-                    # 嵌入失败，显示错误信息
+                # 嵌入失败，显示错误信息
+                if not audio_embedded:
                     p = shape.text_frame.paragraphs[0]
                     p.text = "【⚠️ 音频嵌入失败】"
                     p.font.size = Pt(18)
