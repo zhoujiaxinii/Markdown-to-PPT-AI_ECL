@@ -785,7 +785,9 @@ class PPTGenerator:
             # 单行：使用原来的逻辑
             py_list, ch_list = self._parse_pinyin(text)
             if not ch_list: return None
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, is_english_only)
+            # 检查是否为纯英文
+            single_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in text)
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -808,13 +810,13 @@ class PPTGenerator:
                 line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
                 
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
             return None
     
-    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False):
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text=''):
         # 过滤换行符
         valid_py = [p for p in py_list if p != '\n']
         valid_ch = [c for c in ch_list if c != '\n']
@@ -824,8 +826,8 @@ class PPTGenerator:
         
         # 纯英文：合并单元格，只有一行
         if is_english_only:
-            # 将所有英文内容合并为一个字符串（保留空格）
-            english_text = ''.join(valid_ch).strip()
+            # 使用原始文本（保留空格）
+            english_text = raw_text.strip() if raw_text else ''.join(valid_ch).strip()
             if not english_text:
                 return None
             
@@ -862,7 +864,7 @@ class PPTGenerator:
             pa.alignment = PP_ALIGN.LEFT if alignment is None else alignment
             
             # 隐藏表格边框
-            self._hide_table_borders(tbl)
+            self._hide_borders(tbl)
             return tbl
         
         # 原有的中英文混合逻辑
