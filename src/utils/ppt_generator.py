@@ -1070,15 +1070,15 @@ class PPTGenerator:
                 p.alignment = PP_ALIGN.LEFT
                 used.append('hint')
             
-            # 填充所有文本框 - 字体大小24-48pt，同一页多框时一致
+            # 填充所有文本框 - 字体大小24-40pt，同一页多框时一致
             if not content_list:
                 fs = 24
             else:
                 # 根据文本框数量选择字体大小
-                # 1框: 48pt, 2框: 36pt, 3框: 30pt, 4框: 24pt
+                # 1框: 40pt, 2框: 36pt, 3框: 30pt, 4框: 24pt
                 box_count = len(content_list)
                 if box_count == 1:
-                    fs = 48
+                    fs = 40
                 elif box_count == 2:
                     fs = 36
                 elif box_count == 3:
