@@ -708,7 +708,7 @@ class PPTGenerator:
         
         return py_list, ch_list
 
-    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24):
+    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None):
         # 按换行符分割成多行
         lines = text.split('\n')
         
@@ -716,7 +716,7 @@ class PPTGenerator:
             # 单行：使用原来的逻辑
             py_list, ch_list = self._parse_pinyin(text)
             if not ch_list: return None
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs)
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -736,13 +736,13 @@ class PPTGenerator:
                     continue
                 
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
             return None
     
-    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24):
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None):
         # 过滤换行符
         valid_py = [p for p in py_list if p != '\n']
         valid_ch = [c for c in ch_list if c != '\n']
@@ -761,12 +761,23 @@ class PPTGenerator:
         col_count = max(len(valid_ch), 1)
         if not cw: cw = [width]
         
-        # 计算表格在占位符内的居中位置
-        center_left = left + (width - int(tw)) // 2
-        center_top = top + (height - height) // 2  # 高度不变，保持顶部对齐
+        # 根据占位符的对齐方式计算表格位置
+        from pptx.enum.text import PP_ALIGN
+        if alignment == PP_ALIGN.LEFT or alignment is None:
+            # 左对齐
+            table_left = left
+        elif alignment == PP_ALIGN.CENTER:
+            # 居中
+            table_left = left + (width - int(tw)) // 2
+        elif alignment == PP_ALIGN.RIGHT:
+            # 右对齐
+            table_left = left + width - int(tw)
+        else:
+            # 默认左对齐
+            table_left = left
         
         # 表格实际高度使用传入的完整height，不分割
-        tbl_shape = slide.shapes.add_table(2, col_count, center_left, top, int(tw), height)
+        tbl_shape = slide.shapes.add_table(2, col_count, table_left, top, int(tw), height)
         tbl = tbl_shape.table
         
         for i, w in enumerate(cw[:col_count]): 
@@ -902,6 +913,11 @@ class PPTGenerator:
         if name not in ph: return False
         s = ph[name]
         
+        # 获取占位符的对齐方式
+        alignment = None
+        if s.text_frame.paragraphs:
+            alignment = s.text_frame.paragraphs[0].alignment
+        
         # 自动调整字体大小，确保文本能放入文本框
         fs = self._adjust_font_size_to_fit(s, content, fs)
         
@@ -909,8 +925,8 @@ class PPTGenerator:
         has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
         
         if has_chinese:
-            # 有汉字：用拼音表格处理（支持换行）
-            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
+            # 有汉字：用拼音表格处理（支持换行），传入对齐方式
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment)
         else:
             # 无汉字（英文）：直接设置文本框内容，保留换行符
             s.text_frame.clear()
