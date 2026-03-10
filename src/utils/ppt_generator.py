@@ -660,8 +660,8 @@ class PPTGenerator:
             p.alignment = PP_ALIGN.CENTER
             s.text_frame.word_wrap = True
             
-            # 添加超链接 - 由于python-pptx限制，显示链接文本供用户复制
-            # 如果需要真正的超链接，需要使用底层XML操作
+            # 添加超链接到形状
+            s.click_action.hyperlink.address = link_url
             
             print(f"    🔗 嵌入链接: {link_url[:40]}...")
             return True
