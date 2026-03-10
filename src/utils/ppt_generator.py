@@ -888,20 +888,14 @@ class PPTGenerator:
         # 自动调整字体大小，确保文本能放入文本框
         fs = self._adjust_font_size_to_fit(s, content, fs)
         
-        # 检查是否需要使用拼音表格（纯中文文本，不含英文）
-        def is_pure_chinese(text):
-            """检查文本是否只包含中文（不含英文、数字、标点）"""
-            # 移除非中文内容的字符后检查是否还有中文
-            chinese_only = ''.join(c for c in text if '\u4e00' <= c <= '\u9fff')
-            # 如果有中文，且原文本中没有英文字母，则使用拼音表格
-            has_english = any('a' <= c <= 'z' or 'A' <= c <= 'Z' for c in text)
-            return bool(chinese_only) and not has_english
+        # 检查是否包含汉字
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
         
-        if is_pure_chinese(content):
-            # 纯中文：用拼音表格处理
+        if has_chinese:
+            # 有汉字：用拼音表格处理（支持换行）
             self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
         else:
-            # 英文或中英文混合：直接设置文本框内容，保留换行符
+            # 无汉字（英文）：直接设置文本框内容，保留换行符
             s.text_frame.clear()
             
             # 检查是否有手动换行符
