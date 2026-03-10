@@ -709,30 +709,72 @@ class PPTGenerator:
         return py_list, ch_list
 
     def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24):
-        py_list, ch_list = self._parse_pinyin(text)
-        if not ch_list: return None
+        # 按换行符分割成多行
+        lines = text.split('\n')
+        
+        if len(lines) == 1:
+            # 单行：使用原来的逻辑
+            py_list, ch_list = self._parse_pinyin(text)
+            if not ch_list: return None
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs)
+        else:
+            # 多行：创建多个垂直排列的表格
+            current_top = top
+            row_height = height // len(lines)
+            
+            for line in lines:
+                py_list, ch_list = self._parse_pinyin(line)
+                if not ch_list: 
+                    current_top += row_height
+                    continue
+                
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs)
+                current_top += row_height
+            
+            return None
+    
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24):
+        # 过滤换行符
+        valid_py = [p for p in py_list if p != '\n']
+        valid_ch = [c for c in ch_list if c != '\n']
+        if not valid_ch: return None
+        
         emu = lambda pt: int(pt * 914400 / 72)
+        
         def total_w(f):
-            return sum(emu(f*0.6)*(len(p) if p else 1) + emu(f*0.5) for p in py_list)
+            return sum(emu(f*0.6)*(len(p) if p else 1) + emu(f*0.5) for p in valid_py)
+        
         tw = total_w(fs)
         if tw > width:
             fs = max(int(fs * width / tw), 10); tw = total_w(fs)
-        cw = [emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5) for p in py_list]
-        tbl_shape = slide.shapes.add_table(2, len(ch_list), left, top, int(tw), height)
+        
+        cw = [emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5) for p in valid_py]
+        col_count = max(len(valid_ch), 1)
+        if not cw: cw = [width]
+        
+        tbl_shape = slide.shapes.add_table(2, col_count, left, top, int(tw), height)
         tbl = tbl_shape.table
-        for i, w in enumerate(cw): tbl.columns[i].width = int(w)
+        
+        for i, w in enumerate(cw[:col_count]): 
+            tbl.columns[i].width = int(w)
+        
         tbl.rows[0].height = int(height * 0.45)
         tbl.rows[1].height = int(height * 0.55)
-        for ci, (p, c) in enumerate(zip(py_list, ch_list)):
-            for ri, txt in enumerate([p, c]):
-                cell = tbl.cell(ri, ci)
-                cell.text = txt; cell.text_frame.word_wrap = True  # 允许自动换行
-                pa = cell.text_frame.paragraphs[0]
-                pa.font.size = Pt(fs)
-                pa.font.name = 'SimHei'  # 黑体
-                pa.font.color.rgb = RGBColor(0, 0, 0)
-                pa.alignment = PP_ALIGN.CENTER
-                cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
+        
+        for ci in range(col_count):
+            if ci < len(valid_py) and ci < len(valid_ch):
+                p, c = valid_py[ci], valid_ch[ci]
+                for ri, txt in enumerate([p, c]):
+                    cell = tbl.cell(ri, ci)
+                    cell.text = txt if txt else ''
+                    cell.text_frame.word_wrap = True
+                    pa = cell.text_frame.paragraphs[0]
+                    pa.font.size = Pt(fs)
+                    pa.font.name = 'SimHei'
+                    pa.font.color.rgb = RGBColor(0, 0, 0)
+                    pa.alignment = PP_ALIGN.CENTER
+                    cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
+        
         self._hide_borders(tbl)
         return tbl_shape
 
