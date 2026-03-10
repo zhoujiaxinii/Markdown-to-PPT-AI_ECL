@@ -750,16 +750,12 @@ class PPTGenerator:
         
         emu = lambda pt: int(pt * 914400 / 72)
         
-        def total_w(f):
-            return sum(emu(f*0.6)*(len(p) if p else 1) + emu(f*0.5) for p in valid_py)
-        
-        tw = total_w(fs)
-        if tw > width:
-            fs = max(int(fs * width / tw), 10); tw = total_w(fs)
-        
-        cw = [emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5) for p in valid_py]
         col_count = max(len(valid_ch), 1)
-        if not cw: cw = [width]
+        
+        # 使用占位符的完整宽度，平均分配给各列
+        tw = width
+        col_width = int(width / col_count)
+        cw = [col_width] * col_count
         
         # 表格实际高度使用传入的完整height，不分割
         tbl_shape = slide.shapes.add_table(2, col_count, left, top, int(tw), height)
