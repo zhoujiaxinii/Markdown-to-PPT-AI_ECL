@@ -719,20 +719,16 @@ class PPTGenerator:
             return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs)
         else:
             # 多行：创建多个垂直排列的表格
-            # 使用浮点数计算避免整数除法导致的高度不足
-            row_height = height / len(lines)
             current_top = top
+            row_height = height // len(lines)
             
-            for i, line in enumerate(lines):
+            for line in lines:
                 py_list, ch_list = self._parse_pinyin(line)
                 if not ch_list: 
                     current_top += row_height
                     continue
                 
-                # 最后一行使用剩余高度，避免累积误差
-                actual_row_height = row_height if i < len(lines) - 1 else height - (top - current_top + row_height * (len(lines) - 1))
-                
-                self._create_single_pinyin_table(slide, left, current_top, width, actual_row_height, py_list, ch_list, fs)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs)
                 current_top += row_height
             
             return None
