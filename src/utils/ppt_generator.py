@@ -777,7 +777,7 @@ class PPTGenerator:
         
         return py_list, ch_list
 
-    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None):
+    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None, is_english_only=False):
         # 按换行符分割成多行
         lines = text.split('\n')
         
@@ -785,7 +785,7 @@ class PPTGenerator:
             # 单行：使用原来的逻辑
             py_list, ch_list = self._parse_pinyin(text)
             if not ch_list: return None
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment)
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, is_english_only)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -804,14 +804,17 @@ class PPTGenerator:
                     current_top += row_height
                     continue
                 
+                # 检查这行是否为纯英文
+                line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
+                
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
             return None
     
-    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None):
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False):
         # 过滤换行符
         valid_py = [p for p in py_list if p != '\n']
         valid_ch = [c for c in ch_list if c != '\n']
@@ -819,6 +822,50 @@ class PPTGenerator:
         
         emu = lambda pt: int(pt * 914400 / 72)
         
+        # 纯英文：合并单元格，只有一行
+        if is_english_only:
+            # 将所有英文内容合并为一个字符串（保留空格）
+            english_text = ''.join(valid_ch).strip()
+            if not english_text:
+                return None
+            
+            # 计算表格宽度
+            tw = int(width * 0.9)
+            
+            # 根据占位符的对齐方式计算表格位置
+            from pptx.enum.text import PP_ALIGN
+            if alignment == PP_ALIGN.LEFT or alignment is None:
+                table_left = left
+            elif alignment == PP_ALIGN.CENTER:
+                table_left = left + (width - tw) // 2
+            elif alignment == PP_ALIGN.RIGHT:
+                table_left = left + width - tw
+            else:
+                table_left = left
+            
+            # 创建单行单列的表格
+            tbl_shape = slide.shapes.add_table(1, 1, table_left, top, tw, height)
+            tbl = tbl_shape.table
+            
+            # 设置单元格内容
+            cell = tbl.cell(0, 0)
+            cell.text = english_text
+            cell.text_frame.word_wrap = True
+            cell.text_frame.margin_top = 0
+            cell.text_frame.margin_bottom = 0
+            cell.text_frame.margin_left = 0
+            cell.text_frame.margin_right = 0
+            pa = cell.text_frame.paragraphs[0]
+            pa.font.size = Pt(fs)
+            pa.font.name = 'SimHei'
+            pa.font.color.rgb = RGBColor(0, 0, 0)
+            pa.alignment = PP_ALIGN.LEFT if alignment is None else alignment
+            
+            # 隐藏表格边框
+            self._hide_table_borders(tbl)
+            return tbl
+        
+        # 原有的中英文混合逻辑
         def total_w(f):
             return sum(emu(f*0.6)*(len(p) if p else 1) + emu(f*0.5) for p in valid_py)
         
@@ -993,11 +1040,15 @@ class PPTGenerator:
         # 检查是否包含汉字
         has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
         
-        if has_chinese:
-            # 有汉字：用拼音表格处理（支持换行），传入对齐方式
-            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment)
+        # 检查是否为纯英文（无汉字，只有英文和空格）
+        is_english_only = not has_chinese and bool(content.strip()) and all(c.isascii() or c.isspace() for c in content)
+        
+        if has_chinese or is_english_only:
+            # 有汉字或纯英文：用拼音表格处理，传入对齐方式
+            # 纯英文时 is_english_only=True，会合并单元格
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment, is_english_only)
         else:
-            # 无汉字（英文）：直接设置文本框内容，保留换行符
+            # 无汉字且非纯英文：直接设置文本框内容，保留换行符
             s.text_frame.clear()
             
             # 检查是否有手动换行符
