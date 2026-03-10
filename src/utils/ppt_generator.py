@@ -887,32 +887,39 @@ class PPTGenerator:
         # 自动调整字体大小，确保文本能放入文本框
         fs = self._adjust_font_size_to_fit(s, content, fs)
         
-        # 直接设置文本框内容，保留换行符
-        s.text_frame.clear()
+        # 检查是否包含汉字
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
         
-        # 检查是否有手动换行符
-        has_manual_break = '\n' in content
-        
-        if has_manual_break:
-            # 有换行符：按\n分割添加段落
-            lines = content.split('\n')
-            for i, line in enumerate(lines):
-                if i == 0:
-                    s.text_frame.paragraphs[0].text = line
-                else:
-                    p = s.text_frame.add_paragraph()
-                    p.text = line
-                s.text_frame.paragraphs[i].font.size = Pt(fs)
-                s.text_frame.paragraphs[i].font.name = 'SimHei'  # 黑体
-                s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
+        if has_chinese:
+            # 有汉字：用拼音表格处理（支持换行）
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs)
         else:
-            # 无换行符：设置文本框允许自动换行
-            p = s.text_frame.paragraphs[0]
-            p.text = content
-            p.font.size = Pt(fs)
-            p.font.name = 'SimHei'  # 黑体
-            p.font.color.rgb = RGBColor(0, 0, 0)
-            s.text_frame.word_wrap = True  # 允许自动换行
+            # 无汉字（英文）：直接设置文本框内容，保留换行符
+            s.text_frame.clear()
+            
+            # 检查是否有手动换行符
+            has_manual_break = '\n' in content
+            
+            if has_manual_break:
+                # 有换行符：按\n分割添加段落
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if i == 0:
+                        s.text_frame.paragraphs[0].text = line
+                    else:
+                        p = s.text_frame.add_paragraph()
+                        p.text = line
+                    s.text_frame.paragraphs[i].font.size = Pt(fs)
+                    s.text_frame.paragraphs[i].font.name = 'SimHei'  # 黑体
+                    s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
+            else:
+                # 无换行符：设置文本框允许自动换行
+                p = s.text_frame.paragraphs[0]
+                p.text = content
+                p.font.size = Pt(fs)
+                p.font.name = 'SimHei'  # 黑体
+                p.font.color.rgb = RGBColor(0, 0, 0)
+                s.text_frame.word_wrap = True  # 允许自动换行
         
         s.left = Emu(0)
         return True
