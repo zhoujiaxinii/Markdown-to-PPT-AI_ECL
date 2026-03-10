@@ -322,14 +322,14 @@ class PPTGenerator:
         return None
 
     def _replace_images_on_slide(self, slide, image_urls):
-        """替换幻灯片上的图片，按位置顺序一一对应"""
+        """替换幻灯片上的图片，按位置顺序一一对应，返回替换数量"""
         if not image_urls:
-            return
+            return 0
 
         pic_shapes = self._get_picture_shapes(slide)
         if not pic_shapes:
             print(f"    ⚠️ 模板页无图片可替换，但MD有 {len(image_urls)} 张图片")
-            return
+            return 0
 
         replaced = 0
         for i, url in enumerate(image_urls):
@@ -341,6 +341,8 @@ class PPTGenerator:
 
         if replaced > 0:
             print(f"    📷 替换 {replaced}/{len(image_urls)} 张图片")
+        
+        return replaced
 
     # ── 音频嵌入 ─────────────────────────────────────────
 
@@ -911,12 +913,13 @@ class PPTGenerator:
                 s.left = Emu(0)
         
         # 隐藏未使用的图片占位符（移到页面外）
-        pic_shapes = self._get_picture_shapes(slide)
-        for i, pic in enumerate(pic_shapes):
-            pic_name = f'p{i+1}'
-            if pic_name not in used:
-                # 隐藏图片
-                pic.left = Emu(-100000)
+        # 检查幻灯片中所有图片，根据位置判断是否已使用
+        all_pics = list(slide.shapes)
+        for i, s in enumerate(all_pics):
+            if s.shape_type == 13:  # PICTURE
+                # 如果图片被移到页面左侧外（-100000），说明是被隐藏的未使用图片
+                # 保留在正确位置的图片
+                pass  # 不再隐藏图片，因为已正确替换
 
     # ── 填充单页 ─────────────────────────────────────────
 
@@ -1006,10 +1009,11 @@ class PPTGenerator:
             # 替换图片
             images = data.get('images', [])
             if images:
-                self._replace_images_on_slide(slide, images)
-                # 标记图片占位符为已使用（p1-p20）
-                for i in range(min(len(images), 20)):
-                    used.append(f'p{i+1}')
+                # 记录已替换的图片数量
+                replaced_count = self._replace_images_on_slide(slide, images)
+                # 标记已使用的图片位置
+                for i in range(replaced_count):
+                    used.append(f'pic_{i}')
             n_img = len(images)
             
             # 标记音频占位符为已使用
