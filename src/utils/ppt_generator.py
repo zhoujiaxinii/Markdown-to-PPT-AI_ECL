@@ -857,7 +857,9 @@ class PPTGenerator:
             if not ch_list: return None
             # 检查是否为纯英文
             single_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in text)
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text, english_segments, bold)
+            # 纯英文时字号改为22
+            fs_en = 22 if single_is_english else fs
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs_en, alignment, single_is_english, text, english_segments, bold)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -878,9 +880,11 @@ class PPTGenerator:
                 
                 # 检查这行是否为纯英文
                 line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
+                # 纯英文时字号改为22
+                fs_en = 22 if line_is_english else fs
                 
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line, english_segments, bold)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs_en, alignment, line_is_english, line, english_segments, bold)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
