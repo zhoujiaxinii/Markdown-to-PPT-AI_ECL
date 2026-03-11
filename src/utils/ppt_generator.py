@@ -986,9 +986,10 @@ class PPTGenerator:
                 i += 1
                 continue
             elif i < len(valid_ch):
-                # 中文字符
+                # 中文字符：拼音宽度 + 拼音间距（1-2个字符宽度）
                 p = valid_py[i] if i < len(valid_py) else ''
-                w = emu(fs*0.5)*(len(p) if p else 1) + emu(fs*0.3)
+                # 拼音间距：fs*0.6 约等于1个字符宽度，确保不跨行
+                w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
                 new_cw.append(w)
                 new_valid_py.append(p)
                 new_valid_ch.append(valid_ch[i])
@@ -1011,14 +1012,16 @@ class PPTGenerator:
                     if i == seg['start']:
                         seg_end = seg['end']
                         en_text = ''.join(valid_ch[i:seg_end+1])
-                        en_width = emu(fs * 0.5) * len(en_text) + emu(fs * 0.02) * max(0, len(en_text) - 1) + emu(fs * 0.05)
+                        # 英文宽度：字符宽度 + 字符间距 + 边距
+                        en_width = emu(fs * 0.5) * len(en_text) + emu(fs * 0.5) * max(0, len(en_text) - 1) + emu(fs * 0.1)
                         new_cw.append(en_width)
                         i = seg_end + 1
                         is_merged = True
                         break
                 if not is_merged and i < len(valid_ch):
                     p = valid_py[i] if i < len(valid_py) else ''
-                    w = emu(fs*0.5)*(len(p) if p else 1) + emu(fs*0.3)
+                    # 拼音间距：fs*0.6 约等于1个字符宽度
+                    w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
                     new_cw.append(w)
                     i += 1
             tw = sum(new_cw)
