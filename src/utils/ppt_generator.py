@@ -27,6 +27,45 @@ def _get_font_name(text):
     has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
     return 'Arial' if not has_chinese else 'SimHei'
 
+def _set_mixed_font(text_frame, fs):
+    """为文本框设置混合字体：英文用Arial，中文用SimHei"""
+    if not text_frame.text:
+        return
+    
+    text = text_frame.text
+    text_frame.clear()
+    
+    # 分割文本：英文/数字/符号 vs 中文
+    # 使用正则表达式匹配
+    import re
+    # 匹配中文字符和英文/数字/符号组
+    parts = re.findall(r'[\u4e00-\u9fff]+|[^\u4e00-\u9fff]+', text)
+    
+    for part in parts:
+        if not part:
+            continue
+        # 判断是中文还是英文
+        is_chinese = any('\u4e00' <= c <= '\u9fff' for c in part)
+        font_name = 'SimHei' if is_chinese else 'Arial'
+        
+        # 添加新的 run
+        if len(text_frame.paragraphs) == 0:
+            p = text_frame.add_paragraph()
+        else:
+            p = text_frame.paragraphs[0]
+        
+        run = p.add_run()
+        run.text = part
+        run.font.size = Pt(fs)
+        run.font.name = font_name
+        run.font.color.rgb = RGBColor(0, 0, 0)
+    
+    # 设置段落字体（第一个run的字体为默认）
+    if text_frame.paragraphs:
+        p = text_frame.paragraphs[0]
+        p.font.size = Pt(fs)
+        p.font.color.rgb = RGBColor(0, 0, 0)
+
 NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
@@ -914,9 +953,12 @@ class PPTGenerator:
                     cell.text_frame.margin_bottom = 0
                     cell.text_frame.margin_left = 0
                     cell.text_frame.margin_right = 0
+                    
+                    # 根据字符类型设置字体：英文用Arial，中文用SimHei
+                    font_name = _get_font_name(txt)
                     pa = cell.text_frame.paragraphs[0]
                     pa.font.size = Pt(fs)
-                    pa.font.name = 'SimHei'  # 拼音和中文都使用黑体
+                    pa.font.name = font_name
                     pa.font.color.rgb = RGBColor(0, 0, 0)
                     pa.alignment = PP_ALIGN.CENTER
                     cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
@@ -1052,24 +1094,21 @@ class PPTGenerator:
             has_manual_break = '\n' in content
             
             if has_manual_break:
-                # 有换行符：按\n分割添加段落
+                # 有换行符：按\n分割添加段落，每段单独处理混合字体
                 lines = content.split('\n')
                 for i, line in enumerate(lines):
                     if i == 0:
                         s.text_frame.paragraphs[0].text = line
+                        _set_mixed_font(s.text_frame, fs)
                     else:
                         p = s.text_frame.add_paragraph()
                         p.text = line
-                    s.text_frame.paragraphs[i].font.size = Pt(fs)
-                    s.text_frame.paragraphs[i].font.name = _get_font_name(line)  # 根据内容选择字体
-                    s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
+                        # 为新段落设置混合字体
+                        if p.text_frame:
+                            _set_mixed_font(p.text_frame, fs)
             else:
-                # 无换行符：设置文本框允许自动换行
-                p = s.text_frame.paragraphs[0]
-                p.text = content
-                p.font.size = Pt(fs)
-                p.font.name = _get_font_name(content)  # 根据内容选择字体
-                p.font.color.rgb = RGBColor(0, 0, 0)
+                # 无换行符：设置文本框允许自动换行，使用混合字体
+                _set_mixed_font(s.text_frame, fs)
                 s.text_frame.word_wrap = True  # 允许自动换行
         
         s.left = Emu(0)
