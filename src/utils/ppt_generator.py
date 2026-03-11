@@ -19,6 +19,14 @@ from lxml import etree
 import re, copy, os, subprocess
 from pypinyin import pinyin, Style
 
+def _get_font_name(text):
+    """根据文本内容返回合适的字体：英文用Arial，中文用SimHei"""
+    if not text:
+        return 'SimHei'
+    # 检测是否包含中文字符
+    has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
+    return 'Arial' if not has_chinese else 'SimHei'
+
 NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
@@ -846,7 +854,7 @@ class PPTGenerator:
             cell.text_frame.margin_right = 0
             pa = cell.text_frame.paragraphs[0]
             pa.font.size = Pt(fs)
-            pa.font.name = 'SimHei'
+            pa.font.name = _get_font_name(english_text)
             pa.font.color.rgb = RGBColor(0, 0, 0)
             pa.alignment = PP_ALIGN.LEFT if alignment is None else alignment
             
@@ -908,7 +916,7 @@ class PPTGenerator:
                     cell.text_frame.margin_right = 0
                     pa = cell.text_frame.paragraphs[0]
                     pa.font.size = Pt(fs)
-                    pa.font.name = 'SimHei'
+                    pa.font.name = 'SimHei'  # 拼音和中文都使用黑体
                     pa.font.color.rgb = RGBColor(0, 0, 0)
                     pa.alignment = PP_ALIGN.CENTER
                     cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
@@ -1053,14 +1061,14 @@ class PPTGenerator:
                         p = s.text_frame.add_paragraph()
                         p.text = line
                     s.text_frame.paragraphs[i].font.size = Pt(fs)
-                    s.text_frame.paragraphs[i].font.name = 'SimHei'  # 黑体
+                    s.text_frame.paragraphs[i].font.name = _get_font_name(line)  # 根据内容选择字体
                     s.text_frame.paragraphs[i].font.color.rgb = RGBColor(0, 0, 0)
             else:
                 # 无换行符：设置文本框允许自动换行
                 p = s.text_frame.paragraphs[0]
                 p.text = content
                 p.font.size = Pt(fs)
-                p.font.name = 'SimHei'  # 黑体
+                p.font.name = _get_font_name(content)  # 根据内容选择字体
                 p.font.color.rgb = RGBColor(0, 0, 0)
                 s.text_frame.word_wrap = True  # 允许自动换行
         
