@@ -1073,8 +1073,15 @@ class PPTGenerator:
                     cell.text_frame.margin_left = 0
                     cell.text_frame.margin_right = 0
                     
-                    # 根据字符类型设置字体：英文用Arial，中文用SimHei
-                    font_name = _get_font_name(txt)
+                    # 根据字符类型设置字体
+                    # 拼音行（ri==0）：始终使用黑体
+                    # 汉字/英文行（ri==1）：英文用Arial，中文用SimHei
+                    if ri == 0:
+                        # 拼音行
+                        font_name = 'SimHei'
+                    else:
+                        # 汉字/英文行
+                        font_name = _get_font_name(txt)
                     pa = cell.text_frame.paragraphs[0]
                     pa.font.size = Pt(fs)
                     pa.font.name = font_name
