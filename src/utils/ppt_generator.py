@@ -27,7 +27,7 @@ def _get_font_name(text):
     has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
     return 'Arial' if not has_chinese else 'SimHei'
 
-def _set_mixed_font(text_frame, fs):
+def _set_mixed_font(text_frame, fs, bold=False):
     """为文本框设置混合字体：英文用Arial，中文用SimHei"""
     if not text_frame.text:
         return
@@ -58,6 +58,7 @@ def _set_mixed_font(text_frame, fs):
         run.text = part
         run.font.size = Pt(fs)
         run.font.name = font_name
+        run.font.bold = bold
         run.font.color.rgb = RGBColor(0, 0, 0)
     
     # 设置段落字体（第一个run的字体为默认）
@@ -846,7 +847,7 @@ class PPTGenerator:
         
         return py_list, ch_list, english_segments
 
-    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None, is_english_only=False):
+    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None, is_english_only=False, bold=False):
         # 按换行符分割成多行
         lines = text.split('\n')
         
@@ -856,7 +857,7 @@ class PPTGenerator:
             if not ch_list: return None
             # 检查是否为纯英文
             single_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in text)
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text, english_segments)
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text, english_segments, bold)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -879,13 +880,13 @@ class PPTGenerator:
                 line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
                 
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line, english_segments)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line, english_segments, bold)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
             return None
     
-    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text='', english_segments=None):
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text='', english_segments=None, bold=False):
         # 过滤换行符
         valid_py = [p for p in py_list if p != '\n']
         valid_ch = [c for c in ch_list if c != '\n']
@@ -933,6 +934,7 @@ class PPTGenerator:
             pa = cell.text_frame.paragraphs[0]
             pa.font.size = Pt(fs)
             pa.font.name = _get_font_name(english_text)
+            pa.font.bold = bold
             pa.font.color.rgb = RGBColor(0, 0, 0)
             pa.alignment = PP_ALIGN.LEFT if alignment is None else alignment
             
@@ -1065,6 +1067,7 @@ class PPTGenerator:
                     pa = cell.text_frame.paragraphs[0]
                     pa.font.size = Pt(fs)
                     pa.font.name = font_name
+                    pa.font.bold = bold
                     pa.font.color.rgb = RGBColor(0, 0, 0)
                     pa.alignment = PP_ALIGN.CENTER
                     cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
@@ -1169,7 +1172,7 @@ class PPTGenerator:
         
         return new_fs if new_fs >= min_fs else min_fs
     
-    def _fill(self, slide, name, content, fs=24):
+    def _fill(self, slide, name, content, fs=24, bold=False):
         ph = self._find_all_placeholders(slide)
         if name not in ph: return False
         s = ph[name]
@@ -1191,7 +1194,7 @@ class PPTGenerator:
         if has_chinese or is_english_only:
             # 有汉字或纯英文：用拼音表格处理，传入对齐方式
             # 纯英文时 is_english_only=True，会合并单元格
-            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment, is_english_only)
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment, is_english_only, bold)
         else:
             # 无汉字且非纯英文：直接设置文本框内容，保留换行符
             s.text_frame.clear()
@@ -1289,7 +1292,7 @@ class PPTGenerator:
         elif typ == 'content':
             used = ['h2_0']
             # 三级标题：黑体，28pt，保持占位符位置
-            self._fill(slide, 'h2_0', data['title'], 28)
+            self._fill(slide, 'h2_0', data['title'], 28, bold=True)
             
             # 获取原始文本内容
             content_list = list(data.get('content', []))
