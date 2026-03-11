@@ -745,44 +745,18 @@ class PPTGenerator:
 
     def _parse_pinyin(self, text):
         """解析文本为拼音和汉字列表，支持换行符"""
-        from pypinyin import lazy_pinyin, Style
-        
         py_list, ch_list = [], []
         
         # 按换行符分割处理每一行
         lines = text.split('\n')
         
         for line in lines:
-            # 使用 lazy_pinyin 处理整行文本（正确处理多音字）
-            if line.strip():
-                # 获取不带声调的拼音列表
-                py_line = lazy_pinyin(line, style=Style.NORMAL)
-                
-                # 将拼音列表与汉字一一对应
-                char_index = 0
-                for c in line:
-                    if '\u4e00' <= c <= '\u9fff':
-                        # 是汉字，从拼音列表中取对应拼音
-                        if char_index < len(py_line):
-                            py = py_line[char_index]
-                            py_list.append(py)
-                            char_index += 1
-                        else:
-                            py_list.append('')
-                        ch_list.append(c)
-                    elif c.strip():
-                        # 非汉字字符（如标点），跳过拼音
-                        py_list.append('')
-                        ch_list.append(c)
-                    else:
-                        # 空格等，跳过
-                        py_list.append('')
-                        ch_list.append(c)
-            else:
-                # 空行
-                for c in line:
-                    py_list.append('')
-                    ch_list.append(c)
+            for c in line:
+                if '\u4e00' <= c <= '\u9fff':
+                    py = pinyin(c, style=Style.TONE)[0][0]
+                    py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
+                elif c.strip():
+                    py_list.append(''); ch_list.append(c)
             
             # 如果不是最后一行，添加换行符
             if line != lines[-1]:
