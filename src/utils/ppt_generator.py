@@ -796,6 +796,9 @@ class PPTGenerator:
         py_list, ch_list = [], []
         english_segments = []  # 记录英文段信息
         
+        # 标点符号列表（不包括在英文段中）
+        punctuation = '：？！。，、；：""''（）【】《>,?!.;:()[]<>-\"\' '
+        
         lines = text.split('\n')
         
         for line in lines:
@@ -817,7 +820,18 @@ class PPTGenerator:
                     
                     py = pinyin(c, style=Style.TONE)[0][0]
                     py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
-                elif c.strip():  # 英文/数字/符号
+                elif c in punctuation:
+                    # 标点符号：先保存之前的英文段
+                    if current_english:
+                        english_segments.append({
+                            'start': english_start,
+                            'end': len(ch_list) - 1,
+                            'text': ''.join(current_english)
+                        })
+                        current_english = []
+                        english_start = None
+                    py_list.append(''); ch_list.append(c)
+                elif c.strip():  # 英文/数字（不包括标点）
                     if english_start is None:
                         english_start = len(ch_list)
                     current_english.append(c)
@@ -988,11 +1002,23 @@ class PPTGenerator:
             elif i < len(valid_ch):
                 # 中文字符：拼音宽度 + 拼音间距（1-2个字符宽度）
                 p = valid_py[i] if i < len(valid_py) else ''
+                c = valid_ch[i]
+                
+                # 标点符号无条件与前一个字符合并（无论前面是否有拼音）
+                punctuation = '：？！。，、；：""''（）【】《》,?!.;:()[]<>-\"\' '
+                if not p and c in punctuation:
+                    # 合并到前一列
+                    new_valid_ch[-1] = new_valid_ch[-1] + c
+                    # 增加前一列的宽度
+                    new_cw[-1] += int(emu(fs * 0.4))
+                    i += 1
+                    continue
+                
                 # 拼音间距：fs*0.6 约等于1个字符宽度，确保不跨行
                 w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
                 new_cw.append(w)
                 new_valid_py.append(p)
-                new_valid_ch.append(valid_ch[i])
+                new_valid_ch.append(c)
                 i += 1
         
         # 使用新的列信息
@@ -1020,6 +1046,15 @@ class PPTGenerator:
                         break
                 if not is_merged and i < len(valid_ch):
                     p = valid_py[i] if i < len(valid_py) else ''
+                    c = valid_ch[i]
+                    
+                    # 标点符号无条件与前一个字符合并
+                    punctuation = '：？！。，、；：""''（）【】《》,?!.;:()[]<>-\"\' '
+                    if not p and c in punctuation:
+                        new_cw[-1] += int(emu(fs * 0.4))
+                        i += 1
+                        continue
+                    
                     # 拼音间距：fs*0.6 约等于1个字符宽度
                     w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
                     new_cw.append(w)
