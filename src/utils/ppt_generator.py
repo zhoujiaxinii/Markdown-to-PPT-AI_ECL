@@ -967,10 +967,10 @@ class PPTGenerator:
                     # 这是一个英文段的开始，计算整个段的宽度
                     seg_end = seg['end']
                     en_text = ''.join(valid_ch[i:seg_end+1])
-                    # 英文宽度：每个字符 fs*0.6 + 字符间距 fs*0.1
-                    en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.1) * max(0, len(en_text) - 1)
-                    # 加上与前后字符的间距
-                    en_width += emu(fs * 0.15)
+                    # 英文宽度：减小字符间距系数，使英文更紧凑
+                    en_width = emu(fs * 0.5) * len(en_text) + emu(fs * 0.02) * max(0, len(en_text) - 1)
+                    # 减小边距
+                    en_width += emu(fs * 0.05)
                     
                     new_cw.append(en_width)
                     new_valid_py.append('')  # 拼音行留空
@@ -984,7 +984,7 @@ class PPTGenerator:
             elif i < len(valid_ch):
                 # 中文字符
                 p = valid_py[i] if i < len(valid_py) else ''
-                w = emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5)
+                w = emu(fs*0.5)*(len(p) if p else 1) + emu(fs*0.3)
                 new_cw.append(w)
                 new_valid_py.append(p)
                 new_valid_ch.append(valid_ch[i])
@@ -1007,14 +1007,14 @@ class PPTGenerator:
                     if i == seg['start']:
                         seg_end = seg['end']
                         en_text = ''.join(valid_ch[i:seg_end+1])
-                        en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.1) * max(0, len(en_text) - 1) + emu(fs * 0.15)
+                        en_width = emu(fs * 0.5) * len(en_text) + emu(fs * 0.02) * max(0, len(en_text) - 1) + emu(fs * 0.05)
                         new_cw.append(en_width)
                         i = seg_end + 1
                         is_merged = True
                         break
                 if not is_merged and i < len(valid_ch):
                     p = valid_py[i] if i < len(valid_py) else ''
-                    w = emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5)
+                    w = emu(fs*0.5)*(len(p) if p else 1) + emu(fs*0.3)
                     new_cw.append(w)
                     i += 1
             tw = sum(new_cw)
