@@ -791,25 +791,60 @@ class PPTGenerator:
     # ── 拼音表格 ─────────────────────────────────────────
 
     def _parse_pinyin(self, text):
-        """解析文本为拼音和汉字列表，支持换行符"""
+        """解析文本为拼音和汉字列表，支持换行符，同时标记英文段"""
         py_list, ch_list = [], []
+        english_segments = []  # 记录英文段信息
         
-        # 按换行符分割处理每一行
         lines = text.split('\n')
         
         for line in lines:
-            for c in line:
-                if '\u4e00' <= c <= '\u9fff':
+            # 识别连续英文段
+            current_english = []
+            english_start = None
+            
+            for i, c in enumerate(line):
+                if '\u4e00' <= c <= '\u9fff':  # 中文
+                    # 遇到中文，保存之前的英文段
+                    if current_english:
+                        english_segments.append({
+                            'start': english_start,
+                            'end': len(ch_list) - 1,
+                            'text': ''.join(current_english)
+                        })
+                        current_english = []
+                        english_start = None
+                    
                     py = pinyin(c, style=Style.TONE)[0][0]
                     py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
-                elif c.strip():
+                elif c.strip():  # 英文/数字/符号
+                    if english_start is None:
+                        english_start = len(ch_list)
+                    current_english.append(c)
                     py_list.append(''); ch_list.append(c)
+                else:  # 空格等
+                    if current_english:
+                        english_segments.append({
+                            'start': english_start,
+                            'end': len(ch_list) - 1,
+                            'text': ''.join(current_english)
+                        })
+                        current_english = []
+                        english_start = None
+                    py_list.append(''); ch_list.append(c)
+            
+            # 行尾的英文段
+            if current_english:
+                english_segments.append({
+                    'start': english_start,
+                    'end': len(ch_list) - 1,
+                    'text': ''.join(current_english)
+                })
             
             # 如果不是最后一行，添加换行符
             if line != lines[-1]:
                 py_list.append('\n'); ch_list.append('\n')
         
-        return py_list, ch_list
+        return py_list, ch_list, english_segments
 
     def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None, is_english_only=False):
         # 按换行符分割成多行
@@ -817,11 +852,11 @@ class PPTGenerator:
         
         if len(lines) == 1:
             # 单行：使用原来的逻辑
-            py_list, ch_list = self._parse_pinyin(text)
+            py_list, ch_list, english_segments = self._parse_pinyin(text)
             if not ch_list: return None
             # 检查是否为纯英文
             single_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in text)
-            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text)
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs, alignment, single_is_english, text, english_segments)
         else:
             # 多行：创建多个垂直排列的表格
             valid_lines = [l for l in lines if l.strip()]
@@ -835,7 +870,7 @@ class PPTGenerator:
             current_top = top
             
             for i, line in enumerate(valid_lines):
-                py_list, ch_list = self._parse_pinyin(line)
+                py_list, ch_list, english_segments = self._parse_pinyin(line)
                 if not ch_list: 
                     current_top += row_height
                     continue
@@ -844,17 +879,21 @@ class PPTGenerator:
                 line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
                 
                 # 每行使用固定行高
-                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line)
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs, alignment, line_is_english, line, english_segments)
                 # 下一个表格的顶部位置
                 current_top = top + int((i + 1) * height / row_count)
             
             return None
     
-    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text=''):
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text='', english_segments=None):
         # 过滤换行符
         valid_py = [p for p in py_list if p != '\n']
         valid_ch = [c for c in ch_list if c != '\n']
         if not valid_ch: return None
+        
+        # 默认空列表
+        if english_segments is None:
+            english_segments = []
         
         emu = lambda pt: int(pt * 914400 / 72)
         
@@ -902,16 +941,83 @@ class PPTGenerator:
             return tbl
         
         # 原有的中英文混合逻辑
-        def total_w(f):
-            return sum(emu(f*0.6)*(len(p) if p else 1) + emu(f*0.5) for p in valid_py)
+        # 分析哪些列需要合并
+        # english_segments 包含需要合并的列范围 [start, end]
         
-        tw = total_w(fs)
+        # 构建新的列信息：英文段合并，中文独立
+        new_cw = []
+        new_valid_py = []
+        new_valid_ch = []
+        
+        i = 0
+        while i < len(valid_ch):
+            # 检查当前位置是否在某个英文段中（且该段的起始位置在当前索引之前，即已被处理过）
+            is_merged = False
+            merged_text = ''
+            merge_start = -1
+            
+            for seg in english_segments:
+                if i > seg['start'] and i <= seg['end']:
+                    # 这是一个需要合并到前面英文格的字符
+                    is_merged = True
+                    break
+                elif i == seg['start']:
+                    # 这是一个英文段的开始，计算整个段的宽度
+                    seg_end = seg['end']
+                    en_text = ''.join(valid_ch[i:seg_end+1])
+                    # 英文宽度：每个字符 fs*0.6 + 字符间距 fs*0.1
+                    en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.1) * max(0, len(en_text) - 1)
+                    # 加上与前后字符的间距
+                    en_width += emu(fs * 0.15)
+                    
+                    new_cw.append(en_width)
+                    new_valid_py.append('')  # 拼音行留空
+                    new_valid_ch.append(en_text)  # 合并的英文文本
+                    i = seg_end + 1
+                    break
+            
+            if is_merged:
+                i += 1
+                continue
+            elif i < len(valid_ch):
+                # 中文字符
+                p = valid_py[i] if i < len(valid_py) else ''
+                w = emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5)
+                new_cw.append(w)
+                new_valid_py.append(p)
+                new_valid_ch.append(valid_ch[i])
+                i += 1
+        
+        # 使用新的列信息
+        col_count = len(new_valid_ch)
+        if col_count == 0:
+            return None
+        
+        tw = sum(new_cw)
         if tw > width:
-            fs = max(int(fs * width / tw), 10); tw = total_w(fs)
+            fs = max(int(fs * width / tw), 10)
+            # 重新计算宽度
+            new_cw = []
+            i = 0
+            while i < len(valid_ch):
+                is_merged = False
+                for seg in english_segments:
+                    if i == seg['start']:
+                        seg_end = seg['end']
+                        en_text = ''.join(valid_ch[i:seg_end+1])
+                        en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.1) * max(0, len(en_text) - 1) + emu(fs * 0.15)
+                        new_cw.append(en_width)
+                        i = seg_end + 1
+                        is_merged = True
+                        break
+                if not is_merged and i < len(valid_ch):
+                    p = valid_py[i] if i < len(valid_py) else ''
+                    w = emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5)
+                    new_cw.append(w)
+                    i += 1
+            tw = sum(new_cw)
         
-        cw = [emu(fs*0.6)*(len(p) if p else 1) + emu(fs*0.5) for p in valid_py]
-        col_count = max(len(valid_ch), 1)
-        if not cw: cw = [width]
+        if not new_cw: new_cw = [width]
         
         # 根据占位符的对齐方式计算表格位置
         from pptx.enum.text import PP_ALIGN
@@ -932,7 +1038,7 @@ class PPTGenerator:
         tbl_shape = slide.shapes.add_table(2, col_count, table_left, top, int(tw), height)
         tbl = tbl_shape.table
         
-        for i, w in enumerate(cw[:col_count]): 
+        for i, w in enumerate(new_cw[:col_count]): 
             tbl.columns[i].width = int(w)
         
         # 两行高度加起来要等于总高度
@@ -942,8 +1048,8 @@ class PPTGenerator:
         tbl.rows[1].height = row2_height
         
         for ci in range(col_count):
-            if ci < len(valid_py) and ci < len(valid_ch):
-                p, c = valid_py[ci], valid_ch[ci]
+            if ci < len(new_valid_py) and ci < len(new_valid_ch):
+                p, c = new_valid_py[ci], new_valid_ch[ci]
                 for ri, txt in enumerate([p, c]):
                     cell = tbl.cell(ri, ci)
                     cell.text = txt if txt else ''
