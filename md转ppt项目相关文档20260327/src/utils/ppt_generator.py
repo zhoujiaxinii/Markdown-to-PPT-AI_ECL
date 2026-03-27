@@ -1,0 +1,1568 @@
+# -*- coding: utf-8 -*-
+"""
+PPT生成器 - V16
+V13 基础上新增：
+- 模板按 (文本框数, 图片数) 二维索引匹配
+- 图片嵌入：替换模板中的图片为 MD 引用的图片
+- 音视频支持：{{audio}} 和 {{video}} 占位符 + 文本标记后备
+"""
+
+from pptx import Presentation
+from pptx.util import Pt, Emu
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.dml.color import RGBColor
+from pptx.parts.slide import SlidePart
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.opc.packuri import PackURI
+from lxml import etree
+import re, copy, os, subprocess
+from pypinyin import pinyin, Style
+
+def _get_font_name(text):
+    """根据文本内容返回合适的字体：英文用Arial，中文用SimHei"""
+    if not text:
+        return 'SimHei'
+    # 检测是否包含中文字符
+    has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
+    return 'Arial' if not has_chinese else 'SimHei'
+
+def _set_mixed_font(text_frame, fs, bold=False):
+    """为文本框设置混合字体：英文用Arial，中文用SimHei"""
+    if not text_frame.text:
+        return
+    
+    text = text_frame.text
+    text_frame.clear()
+    
+    # 分割文本：英文/数字/符号 vs 中文
+    # 使用正则表达式匹配
+    import re
+    # 匹配中文字符和英文/数字/符号组
+    parts = re.findall(r'[\u4e00-\u9fff]+|[^\u4e00-\u9fff]+', text)
+    
+    for part in parts:
+        if not part:
+            continue
+        # 判断是中文还是英文
+        is_chinese = any('\u4e00' <= c <= '\u9fff' for c in part)
+        font_name = 'SimHei' if is_chinese else 'Arial'
+        
+        # 添加新的 run
+        if len(text_frame.paragraphs) == 0:
+            p = text_frame.add_paragraph()
+        else:
+            p = text_frame.paragraphs[0]
+        
+        run = p.add_run()
+        run.text = part
+        run.font.size = Pt(fs)
+        run.font.name = font_name
+        run.font.bold = bold
+        run.font.color.rgb = RGBColor(0, 0, 0)
+    
+    # 设置段落字体（第一个run的字体为默认）
+    if text_frame.paragraphs:
+        p = text_frame.paragraphs[0]
+        p.font.size = Pt(fs)
+        p.font.color.rgb = RGBColor(0, 0, 0)
+
+NS_P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+
+
+class PPTGenerator:
+    def __init__(self, template_path, md_content, md_dir=None):
+        self.template_path = template_path
+        self.md_content = md_content
+        # MD 文件所在目录，用于解析图片相对路径
+        self.md_dir = md_dir or os.path.dirname(os.path.abspath(template_path))
+        self.prs = Presentation(template_path)
+        self._analyze_templates()
+
+    # ── 模板分析 ──────────────────────────────────────────
+
+    def _count_images(self, slide):
+        """统计幻灯片中的图片数量"""
+        count = 0
+        for s in slide.shapes:
+            if s.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                count += 1
+        return count
+
+    def _analyze_templates(self):
+        """分析模板，按 (文本框数, 图片数, 有无音视频) 三维索引正文模板"""
+        self.templates = {
+            'cover': None, 'section': None, 'end': None,
+        }
+        # 三维索引：(h3_count, img_count, media_type) -> [模板页索引列表]
+        # media_type: None=无, 'audio'=有音频, 'video'=有视频, 'link'=有链接
+        self.content_index = {}
+
+        for idx, slide in enumerate(self.prs.slides):
+            ph = self._find_all_placeholders(slide)
+            img_count = self._count_images(slide)
+            
+            # 检测是否有 audio/video/link 占位符（ph是字典，键是占位符名称）
+            has_audio = 'audio' in ph
+            has_video = 'video' in ph
+            has_link = 'link' in ph
+            media_type = 'video' if has_video else ('audio' if has_audio else ('link' if has_link else None))
+
+            # 结束页
+            if any('谢' in s.text_frame.text or 'xiè' in s.text_frame.text.lower()
+                   for s in slide.shapes if s.has_text_frame):
+                self.templates['end'] = idx
+                continue
+
+            # 封面页
+            if 'h0_0' in ph:
+                self.templates['cover'] = idx
+                continue
+
+            # 章节页
+            if 'h1_0' in ph and 'h2_0' not in ph:
+                self.templates['section'] = idx
+                continue
+
+            # 正文页 — 按 (文本框数, 图片数, 媒体类型) 索引
+            if 'h2_0' in ph:
+                h3_count = len([p for p in ph if p.startswith('h3_')])
+                key = (h3_count, img_count, media_type)
+                self.content_index.setdefault(key, []).append(idx)
+                continue
+
+        # 打印分析结果
+        _p = lambda k: f"第{self.templates[k]+1}页" if self.templates[k] is not None else "无"
+        print(f"\n=== 模板分析 (V13) ===")
+        print(f"封面:{_p('cover')} 章节:{_p('section')} 结束:{_p('end')}")
+        print(f"正文模板 (文本框×图片×媒体):")
+        for k in sorted(self.content_index.keys(), key=lambda x: (x[0], x[1], str(x[2]))):
+            pages = [f"页{i+1}" for i in self.content_index[k]]
+            media_str = f", {k[2]}" if k[2] else ""
+            print(f"  {k[0]}文本框 × {k[1]}图片{media_str} → {pages}")
+
+    # ── 模板匹配 ──────────────────────────────────────────
+
+    
+    def _match_content_template(self, text_count, image_count, media_type=None):
+        """
+        匹配正文模板：精确匹配 (文本框数, 图片数, 媒体类型)
+        找不到精确匹配时返回空列表，由调用方处理智能生成
+        """
+        tc = min(text_count, 4)
+        ic = image_count
+
+        # 精确匹配 (文本框数, 图片数, 媒体类型)
+        if (tc, ic, media_type) in self.content_index:
+            return self.content_index[(tc, ic, media_type)]
+
+        # 精确匹配 (文本框数, 图片数)，忽略媒体类型
+        if (tc, ic, None) in self.content_index:
+            return self.content_index[(tc, ic, None)]
+
+        # 无匹配
+        return []
+    
+    # ── 幻灯片XML深拷贝 ──────────────────────────────────
+
+    def _clone_slide(self, source_idx):
+        """XML深拷贝，返回新幻灯片的rId"""
+        src = self.prs.slides[source_idx]
+        layout_part = src.slide_layout.part
+
+        existing_nums = []
+        for p in self.prs.part.package.iter_parts():
+            pn = str(p.partname)
+            if '/slides/slide' in pn and 'Layout' not in pn:
+                try: existing_nums.append(int(pn.split('/')[-1].replace('slide','').replace('.xml','')))
+                except: pass
+        new_partname = PackURI(f'/ppt/slides/slide{max(existing_nums)+1}.xml')
+
+        new_part = SlidePart.new(new_partname, self.prs.part.package, layout_part)
+        new_part._element = copy.deepcopy(src._element)
+
+        for rel in src.part.rels.values():
+            if rel.reltype == RT.SLIDE_LAYOUT: continue
+            if rel.is_external:
+                new_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+            else:
+                new_part.relate_to(rel.target_part, rel.reltype, rel.rId)
+
+        rId = self.prs.part.relate_to(new_part, RT.SLIDE)
+        new_id = max(int(s.get('id')) for s in self.prs.slides._sldIdLst) + 1
+        sldId = etree.SubElement(self.prs.slides._sldIdLst, f'{{{NS_P}}}sldId')
+        sldId.set('id', str(new_id))
+        sldId.set(f'{{{NS_R}}}id', rId)
+
+        return rId
+
+    def _get_slide_by_rId(self, rId):
+        """通过rId获取幻灯片对象"""
+        return self.prs.part.related_slide(rId)
+
+    def _get_rId_by_idx(self, idx):
+        """获取原始模板页的rId"""
+        return self.prs.slides._sldIdLst[idx].rId
+
+    # ── 图片替换 ──────────────────────────────────────────
+
+    def _get_picture_shapes(self, slide):
+        """获取幻灯片中所有图片shape，按位置排序（左上→右下）"""
+        pics = []
+        for s in slide.shapes:
+            if s.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                pics.append(s)
+        # 按 top 再按 left 排序，保证替换顺序一致
+        pics.sort(key=lambda s: (s.top, s.left))
+        return pics
+
+    def _replace_image(self, slide, pic_shape, image_path):
+        """替换幻灯片中的一个图片，保持原位置和尺寸"""
+        # 在线图片URL - 下载并替换
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            return self._replace_image_from_url(slide, pic_shape, image_path)
+        
+        # 解析本地图片路径
+        abs_path = self._resolve_image_path(image_path)
+        if not abs_path or not os.path.exists(abs_path):
+            print(f"    ⚠️ 图片不存在: {image_path}")
+            return False
+
+        # 获取原图的位置和尺寸
+        left = pic_shape.left
+        top = pic_shape.top
+        width = pic_shape.width
+        height = pic_shape.height
+
+        # 删除原图片 shape
+        sp_elem = pic_shape._element
+        sp_elem.getparent().remove(sp_elem)
+
+        # 在相同位置添加新图片
+        slide.shapes.add_picture(abs_path, left, top, width, height)
+        return True
+
+    def _replace_image_from_url(self, slide, pic_shape, image_url):
+        """从在线URL下载并替换图片"""
+        import urllib.request
+        import tempfile
+        import shutil
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_images')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            import hashlib
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()
+            ext = os.path.splitext(image_url.split('?')[0])[-1] or '.jpg'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载图片（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                # 设置请求头模拟浏览器
+                req = urllib.request.Request(
+                    image_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+                print(f"    📷 下载图片: {image_url[:40]}...")
+            
+            # 获取原图的位置和尺寸
+            left = pic_shape.left
+            top = pic_shape.top
+            width = pic_shape.width
+            height = pic_shape.height
+
+            # 删除原图片 shape
+            sp_elem = pic_shape._element
+            sp_elem.getparent().remove(sp_elem)
+
+            # 在相同位置添加新图片
+            slide.shapes.add_picture(tmp_path, left, top, width, height)
+            
+            print(f"    📷 替换图片成功: {image_url[:40]}...")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 在线图片下载失败: {image_url[:40]}... 错误: {e}")
+            return False
+
+    def _resolve_image_path(self, image_path):
+        """解析图片路径：支持绝对路径、相对于MD文件的路径"""
+        if os.path.isabs(image_path):
+            return image_path
+
+        # 相对于 MD 文件目录
+        candidate = os.path.join(self.md_dir, image_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于模板目录
+        template_dir = os.path.dirname(os.path.abspath(self.template_path))
+        candidate = os.path.join(template_dir, image_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于当前工作目录
+        if os.path.exists(image_path):
+            return os.path.abspath(image_path)
+
+        return None
+
+    def _replace_images_on_slide(self, slide, image_urls):
+        """替换幻灯片上的图片，按位置顺序一一对应，返回替换数量"""
+        if not image_urls:
+            return 0
+
+        pic_shapes = self._get_picture_shapes(slide)
+        if not pic_shapes:
+            print(f"    ⚠️ 模板页无图片可替换，但MD有 {len(image_urls)} 张图片")
+            return 0
+
+        replaced = 0
+        for i, url in enumerate(image_urls):
+            if i >= len(pic_shapes):
+                print(f"    ⚠️ 图片 {url} 无对应模板图片位置（已用完 {len(pic_shapes)} 个位置）")
+                break
+            if self._replace_image(slide, pic_shapes[i], url):
+                replaced += 1
+
+        if replaced > 0:
+            print(f"    📷 替换 {replaced}/{len(image_urls)} 张图片")
+        
+        return replaced
+
+    # ── 音频嵌入 ─────────────────────────────────────────
+
+    def _resolve_audio_path(self, audio_path):
+        """解析音频路径"""
+        if os.path.isabs(audio_path):
+            if os.path.exists(audio_path):
+                return audio_path
+            return None
+
+        # 相对于 MD 文件目录
+        candidate = os.path.join(self.md_dir, audio_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于模板目录
+        template_dir = os.path.dirname(os.path.abspath(self.template_path))
+        candidate = os.path.join(template_dir, audio_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # 相对于当前工作目录
+        if os.path.exists(audio_path):
+            return os.path.abspath(audio_path)
+
+        return None
+
+    def _embed_audio(self, slide, audio_path):
+        """嵌入音频到幻灯片"""
+        abs_path = self._resolve_audio_path(audio_path)
+        if not abs_path:
+            print(f"    ⚠️ 音频文件不存在: {audio_path}")
+            return False
+
+        # 检查文件大小
+        file_size = os.path.getsize(abs_path)
+        if file_size > 50 * 1024 * 1024:  # 50MB limit
+            print(f"    ⚠️ 音频文件过大: {file_size/1024/1024:.1f}MB (最大50MB)")
+            return False
+
+        # 找到幻灯片中右下角的位置（通常是放媒体的位置）
+        # 先尝试找 {{audio}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'audio' in ph:
+            # 使用占位符位置
+            s = ph['audio']
+            left, top = s.left, s.top
+            # 删除占位符
+            s.text_frame.clear()
+            s.left = Emu(0)
+        else:
+            # 默认放到右下角，靠近边缘
+            # 获取幻灯片大小
+            slide_width = slide.slide_layout.slide_width
+            slide_height = slide.slide_layout.slide_height
+            # 右下角位置
+            left = Emu(int(slide_width * 0.7))
+            top = Emu(int(slide_height * 0.7))
+
+        try:
+            # 嵌入音频
+            audio_shape = slide.shapes.add_audio(
+                abs_path,  # 文件路径
+                left,      # 左侧位置
+                top,       # 顶部位置
+                Emu(1000000),  # 宽度 1cm
+                Emu(1000000)   # 高度 1cm
+            )
+            # 设置音频图标显示
+            audio_shape.name = "音频"
+            # 隐藏音频图标（只保留功能）
+            audio_shape.left = Emu(0)
+            audio_shape.top = Emu(0)
+            audio_shape.width = Emu(0)
+            audio_shape.height = Emu(0)
+
+            print(f"    🔊 嵌入音频: {os.path.basename(audio_path)}")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 音频嵌入失败: {e}")
+            return False
+
+    def _embed_media_to_placeholder(self, slide, placeholder_name, media_path):
+        """
+        将音视频嵌入到 {{audio}} 或 {{video}} 占位符位置
+        - {{audio}} → 📢 图标
+        - {{video}} → 📺 图标
+        - 支持在线URL下载嵌入
+        - 支持本地文件嵌入
+        返回: 是否嵌入成功
+        """
+        ph = self._find_all_placeholders(slide)
+        if placeholder_name not in ph:
+            return False
+        
+        s = ph[placeholder_name]
+        
+        # 判断是否是在线链接
+        is_online = media_path.startswith('http://') or media_path.startswith('https://')
+        
+        emoji = "📢" if placeholder_name == 'audio' else "📺"
+        
+        # 尝试下载并嵌入（在线链接）
+        if is_online:
+            if self._embed_media_from_url(slide, placeholder_name, s, media_path):
+                return True
+        
+        # 尝试本地文件嵌入
+        local_path = self._resolve_audio_path(media_path) if placeholder_name == 'audio' else self._resolve_video_path(media_path)
+        if local_path and os.path.exists(local_path):
+            if self._embed_media_file(slide, placeholder_name, s, local_path):
+                return True
+        
+        # 无法嵌入时，显示"嵌入失败"文本
+        tf = s.text_frame
+        tf.clear()
+        p = tf.paragraphs[0]
+        p.text = f"【⚠️ {placeholder_name}嵌入失败】"
+        p.font.size = Pt(18)
+        p.font.name = 'SimHei'
+        p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+        p.alignment = PP_ALIGN.CENTER
+        print(f"    ⚠️ {placeholder_name}嵌入失败")
+
+    def _embed_media_from_url(self, slide, placeholder_name, shape, media_url):
+        """从在线URL下载音视频并嵌入PPT"""
+        import urllib.request
+        import shutil
+        import hashlib
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            url_hash = hashlib.md5(media_url.encode()).hexdigest()
+            ext = '.mp3' if placeholder_name == 'audio' else '.mp4'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载文件（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                print(f"    📥 下载{placeholder_name}: {media_url[:40]}...")
+                req = urllib.request.Request(
+                    media_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+            
+            # 嵌入到PPT
+            return self._embed_media_file(slide, placeholder_name, shape, tmp_path)
+            
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}下载失败: {e}")
+            return False
+
+    def _embed_media_file(self, slide, placeholder_name, shape, media_path):
+        """将本地音视频文件嵌入PPT"""
+        try:
+            # 获取形状位置
+            left = shape.left
+            top = shape.top
+            width = shape.width
+            height = shape.height
+            
+            # 如果位置为0，使用默认值
+            if left == 0 and top == 0:
+                slide_width = self.prs.slide_width
+                slide_height = self.prs.slide_height
+                if placeholder_name == 'video':
+                    left = Emu(int(slide_width * 0.3))
+                    top = Emu(int(slide_height * 0.3))
+                    width = Emu(int(slide_width * 0.4))
+                    height = Emu(int(slide_height * 0.4))
+                else:
+                    left = Emu(int(slide_width * 0.4))
+                    top = Emu(int(slide_height * 0.4))
+                    width = Emu(2000000)
+                    height = Emu(2000000)
+            
+            emoji = "📢" if placeholder_name == 'audio' else "📺"
+            
+            # 提取视频第一帧作为封面
+            poster_frame = None
+            if placeholder_name == 'video' and media_path.endswith('.mp4'):
+                try:
+                    import hashlib
+                    tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    video_hash = hashlib.md5(media_path.encode()).hexdigest()
+                    poster_path = os.path.join(tmp_dir, f"{video_hash}_poster.jpg")
+                    
+                    if not os.path.exists(poster_path):
+                        # 提取第一帧
+                        subprocess.run([
+                            'ffmpeg', '-i', media_path, 
+                            '-ss', '00:00:00.5',  # 从0.5秒开始，避免黑帧
+                            '-vframes', '1',
+                            '-q:v', '2',  # 高质量
+                            '-y', poster_path
+                        ], capture_output=True, timeout=30)
+                    
+                    if os.path.exists(poster_path) and os.path.getsize(poster_path) > 0:
+                        poster_frame = poster_path
+                        print(f"    📺 提取视频封面: {os.path.basename(poster_path)}")
+                except Exception as e:
+                    print(f"    ⚠️ 视频封面提取失败: {e}")
+            
+            if placeholder_name == 'video':
+                # 视频使用 add_movie，添加封面
+                movie = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=poster_frame)
+                movie.name = "视频"
+                print(f"    📺 嵌入视频: {os.path.basename(media_path)}")
+            else:
+                # 音频嵌入：使用 add_movie 嵌入到占位符位置
+                audio_embedded = False
+                try:
+                    # 将音频嵌入到占位符位置（显示默认图标）
+                    audio = slide.shapes.add_movie(media_path, left, top, width, height, poster_frame_image=None)
+                    audio.name = "音频"
+                    audio_embedded = True
+                    print(f"    📢 嵌入音频: {os.path.basename(media_path)}")
+                except Exception as e:
+                    print(f"    ⚠️ add_movie嵌入音频失败: {e}")
+                
+                # 嵌入失败，显示错误信息
+                if not audio_embedded:
+                    p = shape.text_frame.paragraphs[0]
+                    p.text = "【⚠️ 音频嵌入失败】"
+                    p.font.size = Pt(18)
+                    p.font.name = 'SimHei'
+                    p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+                    p.alignment = PP_ALIGN.CENTER
+            
+            # 清除占位符（如果还没清除）
+            # shape.text_frame.clear()  # 注释掉，因为上面已经处理了
+            
+            return True
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}嵌入失败: {e}")
+            return False
+
+    def _embed_media_direct(self, slide, media_url):
+        """直接嵌入音视频到幻灯片（无需占位符）"""
+        import urllib.request
+        import shutil
+        import hashlib
+        
+        # 判断类型
+        is_video = media_url.endswith('.mp4') or media_url.endswith('.avi') or media_url.endswith('.webm')
+        placeholder_name = 'video' if is_video else 'audio'
+        emoji = "📺" if is_video else "📢"
+        
+        try:
+            # 创建临时目录
+            tmp_dir = os.path.join(os.getcwd(), '.tmp_media')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
+            # 生成临时文件名
+            url_hash = hashlib.md5(media_url.encode()).hexdigest()
+            ext = '.mp4' if is_video else '.mp3'
+            tmp_path = os.path.join(tmp_dir, f"{url_hash}{ext}")
+            
+            # 下载文件（如果缓存不存在）
+            if not os.path.exists(tmp_path):
+                print(f"    📥 下载{placeholder_name}: {media_url[:40]}...")
+                req = urllib.request.Request(
+                    media_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    with open(tmp_path, 'wb') as f:
+                        shutil.copyfileobj(response, f)
+            
+            # 计算位置（幻灯片中央）
+            slide_width = self.prs.slide_width
+            slide_height = self.prs.slide_height
+            
+            if is_video:
+                left = Emu(int(slide_width * 0.2))
+                top = Emu(int(slide_height * 0.2))
+                width = Emu(int(slide_width * 0.6))
+                height = Emu(int(slide_height * 0.5))
+            else:
+                left = Emu(int(slide_width * 0.4))
+                top = Emu(int(slide_height * 0.4))
+                width = Emu(2000000)
+                height = Emu(2000000)
+            
+            # 嵌入
+            if is_video:
+                movie = slide.shapes.add_movie(tmp_path, left, top, width, height, poster_frame_image=None)
+                movie.name = "视频"
+                print(f"    📺 直接嵌入视频: {os.path.basename(tmp_path)}")
+            else:
+                audio = slide.shapes.add_movie(tmp_path, left, top, width, height, poster_frame_image=None)
+                audio.name = "音频"
+                print(f"    📢 直接嵌入音频: {os.path.basename(tmp_path)}")
+            
+            return True
+        except Exception as e:
+            print(f"    ⚠️ {placeholder_name}直接嵌入失败: {e}")
+            return False
+
+    def _add_hyperlink_to_shape(self, shape, url):
+        """为形状添加超链接"""
+        try:
+            sp = shape.element
+            from lxml import etree
+            nsmap = {
+                'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+                'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+            }
+            # 尝试添加超链接（部分格式支持）
+            pass
+        except Exception as e:
+            pass
+
+    def _resolve_video_path(self, video_path):
+        """解析视频路径"""
+        if os.path.isabs(video_path):
+            if os.path.exists(video_path):
+                return video_path
+            return None
+        
+        for base_dir in [self.md_dir, os.path.dirname(os.path.abspath(self.template_path)), os.getcwd()]:
+            candidate = os.path.join(base_dir, video_path)
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def _embed_link(self, slide, link_url):
+        """
+        在幻灯片中添加可点击的链接（点击后在浏览器中打开）
+        """
+        if not link_url:
+            return False
+        
+        # 找到 {{link}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'link' not in ph:
+            print(f"    ⚠️ 未找到 {{link}} 占位符")
+            return False
+        
+        s = ph['link']
+        
+        try:
+            # 清除占位符内容
+            s.text_frame.clear()
+            
+            # 添加链接文本
+            p = s.text_frame.paragraphs[0]
+            p.text = "🔗 点击打开游戏链接进行游玩"
+            p.font.size = Pt(18)
+            p.font.name = 'SimHei'
+            p.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
+            p.alignment = PP_ALIGN.CENTER
+            s.text_frame.word_wrap = True
+            
+            # 添加超链接到形状
+            s.click_action.hyperlink.address = link_url
+            
+            print(f"    🔗 嵌入链接: {link_url[:40]}...")
+            return True
+        except Exception as e:
+            print(f"    ⚠️ 链接嵌入失败: {e}")
+            # 失败时显示文本
+            s.text_frame.clear()
+            p = s.text_frame.paragraphs[0]
+            p.text = f"🔗 点击打开游戏链接进行游玩: {link_url[:20]}..."
+            p.font.size = Pt(14)
+            p.font.name = 'SimHei'
+            p.alignment = PP_ALIGN.CENTER
+            return False
+
+    def _embed_audio_on_slide(self, slide, audio_path):
+        """
+        在幻灯片中嵌入音频
+        注意: python-pptx 不直接支持 add_audio，使用 add_movie 作为后备方案
+        或者需要手动在模板中嵌入音频占位符
+        """
+        if not audio_path:
+            return
+
+        abs_path = self._resolve_audio_path(audio_path)
+        if not abs_path:
+            print(f"    ⚠️ 音频文件不存在: {audio_path}")
+            return
+
+        # 获取幻灯片尺寸
+        try:
+            slide_width = self.prs.slide_width
+            slide_height = self.prs.slide_height
+        except:
+            slide_width = Emu(12192000)
+            slide_height = Emu(6858000)
+
+        # 找 {{audio}} 占位符
+        ph = self._find_all_placeholders(slide)
+        if 'audio' in ph:
+            s = ph['audio']
+            left, top = s.left, s.top
+            width, height = s.width, s.height
+            s.text_frame.clear()
+        else:
+            # 默认右下角位置
+            left = Emu(int(slide_width * 0.78))
+            top = Emu(int(slide_height * 0.75))
+            width = Emu(1500000)
+            height = Emu(1500000)
+
+        # 尝试使用 add_movie（PPT 中音频和视频都作为媒体处理）
+        try:
+            # 注意：python-pptx 的 add_movie 需要有效的视频文件
+            # 对于音频，可能无法真正嵌入，仅创建媒体占位符
+            audio_shape = slide.shapes.add_movie(
+                abs_path,
+                left, top, width, height,
+                poster_frame_image=None
+            )
+            audio_shape.name = "音频"
+            # 检查是否真的嵌入了媒体
+            # 如果没有实际媒体数据，给出提示
+            print(f"    🔊 已添加音频占位符: {os.path.basename(audio_path)} (需模板支持)")
+        except Exception as e:
+            print(f"    ⚠️ 音频嵌入需模板预置占位符: {os.path.basename(audio_path)}")
+
+    def _embed_audio_xml(self, slide, audio_path, left, top, width, height):
+        """通过 XML 直接嵌入音频（高级用法）"""
+        import io
+        from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+        # 读取音频文件
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+
+        # 确定 MIME 类型
+        ext = audio_path.lower().split('.')[-1]
+        mime_types = {
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav',
+            'mp4': 'video/mp4',
+            'm4a': 'audio/mp4',
+        }
+        mime_type = mime_types.get(ext, 'application/octet-stream')
+
+        # 创建媒体 part
+        media_part_name = f'/ppt/media/audio_{id(audio_path)}.{ext}'
+        # 注意：这里只是标记，实际嵌入需要更复杂的 XML 处理
+        # 暂时返回失败，让用户手动在模板中嵌入音频
+        raise NotImplementedError("XML audio embedding not fully implemented")
+
+    # ── 拼音表格 ─────────────────────────────────────────
+
+    def _parse_pinyin(self, text):
+        """解析文本为拼音和汉字列表，支持换行符，同时标记英文段"""
+        py_list, ch_list = [], []
+        english_segments = []  # 记录英文段信息
+        
+        lines = text.split('\n')
+        
+        for line in lines:
+            # 识别连续英文段
+            current_english = []
+            english_start = None
+            
+            for i, c in enumerate(line):
+                if '\u4e00' <= c <= '\u9fff':  # 中文
+                    # 遇到中文，保存之前的英文段
+                    if current_english:
+                        english_segments.append({
+                            'start': english_start,
+                            'end': len(ch_list) - 1,
+                            'text': ''.join(current_english)
+                        })
+                        current_english = []
+                        english_start = None
+                    
+                    py = pinyin(c, style=Style.TONE)[0][0]
+                    py_list.append(re.sub(r'\d$', '', py)); ch_list.append(c)
+                elif c.strip():  # 英文/数字/符号
+                    if english_start is None:
+                        english_start = len(ch_list)
+                    current_english.append(c)
+                    py_list.append(''); ch_list.append(c)
+                else:  # 空格等
+                    if current_english:
+                        english_segments.append({
+                            'start': english_start,
+                            'end': len(ch_list) - 1,
+                            'text': ''.join(current_english)
+                        })
+                        current_english = []
+                        english_start = None
+                    py_list.append(''); ch_list.append(c)
+            
+            # 行尾的英文段
+            if current_english:
+                english_segments.append({
+                    'start': english_start,
+                    'end': len(ch_list) - 1,
+                    'text': ''.join(current_english)
+                })
+            
+            # 如果不是最后一行，添加换行符
+            if line != lines[-1]:
+                py_list.append('\n'); ch_list.append('\n')
+        
+        return py_list, ch_list, english_segments
+
+    def _create_pinyin_table(self, slide, left, top, width, height, text, fs=24, alignment=None, is_english_only=False, bold=False):
+        # 按换行符分割成多行
+        lines = text.split('\n')
+        
+        if len(lines) == 1:
+            # 单行：使用原来的逻辑
+            py_list, ch_list, english_segments = self._parse_pinyin(text)
+            if not ch_list: return None
+            # 检查是否为纯英文
+            single_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in text)
+            # 纯英文时字号改为22
+            fs_en = 22 if single_is_english else fs
+            return self._create_single_pinyin_table(slide, left, top, width, height, py_list, ch_list, fs_en, alignment, single_is_english, text, english_segments, bold)
+        else:
+            # 多行：创建多个垂直排列的表格
+            valid_lines = [l for l in lines if l.strip()]
+            row_count = len(valid_lines)
+            if row_count == 0: return None
+            
+            # 计算每行高度，确保能放下所有行
+            # 预留10%边距防止重叠
+            row_height = int(height / row_count * 0.9)
+            
+            current_top = top
+            
+            for i, line in enumerate(valid_lines):
+                py_list, ch_list, english_segments = self._parse_pinyin(line)
+                if not ch_list: 
+                    current_top += row_height
+                    continue
+                
+                # 检查这行是否为纯英文
+                line_is_english = all((c.isascii() or c.isspace() or c == '\n') for c in line)
+                # 纯英文时字号改为22
+                fs_en = 22 if line_is_english else fs
+                
+                # 每行使用固定行高
+                self._create_single_pinyin_table(slide, left, current_top, width, row_height, py_list, ch_list, fs_en, alignment, line_is_english, line, english_segments, bold)
+                # 下一个表格的顶部位置
+                current_top = top + int((i + 1) * height / row_count)
+            
+            return None
+    
+    def _create_single_pinyin_table(self, slide, left, top, width, height, py_list, ch_list, fs=24, alignment=None, is_english_only=False, raw_text='', english_segments=None, bold=False):
+        # 过滤换行符
+        valid_py = [p for p in py_list if p != '\n']
+        valid_ch = [c for c in ch_list if c != '\n']
+        if not valid_ch: return None
+        
+        # 默认空列表
+        if english_segments is None:
+            english_segments = []
+        
+        emu = lambda pt: int(pt * 914400 / 72)
+        
+        # 纯英文：合并单元格，只有一行
+        if is_english_only:
+            # 使用原始文本（保留空格）
+            english_text = raw_text.strip() if raw_text else ''.join(valid_ch).strip()
+            if not english_text:
+                return None
+            
+            # 计算表格宽度
+            tw = int(width * 0.9)
+            
+            # 根据占位符的对齐方式计算表格位置
+            from pptx.enum.text import PP_ALIGN
+            if alignment == PP_ALIGN.LEFT or alignment is None:
+                table_left = left
+            elif alignment == PP_ALIGN.CENTER:
+                table_left = left + (width - tw) // 2
+            elif alignment == PP_ALIGN.RIGHT:
+                table_left = left + width - tw
+            else:
+                table_left = left
+            
+            # 创建单行单列的表格
+            tbl_shape = slide.shapes.add_table(1, 1, table_left, top, tw, height)
+            tbl = tbl_shape.table
+            
+            # 设置单元格内容
+            cell = tbl.cell(0, 0)
+            cell.text = english_text
+            cell.text_frame.word_wrap = True
+            cell.text_frame.margin_top = 0
+            cell.text_frame.margin_bottom = 0
+            cell.text_frame.margin_left = 0
+            cell.text_frame.margin_right = 0
+            pa = cell.text_frame.paragraphs[0]
+            pa.font.size = Pt(fs)
+            pa.font.name = _get_font_name(english_text)
+            pa.font.bold = bold
+            pa.font.color.rgb = RGBColor(0, 0, 0)
+            pa.alignment = PP_ALIGN.LEFT if alignment is None else alignment
+            
+            # 隐藏表格边框
+            self._hide_borders(tbl)
+            return tbl
+        
+        # 原有的中英文混合逻辑
+        # 分析哪些列需要合并
+        # english_segments 包含需要合并的列范围 [start, end]
+        
+        # 构建新的列信息：英文段合并，中文独立
+        new_cw = []
+        new_valid_py = []
+        new_valid_ch = []
+        
+        i = 0
+        while i < len(valid_ch):
+            # 检查当前位置是否在某个英文段中（且该段的起始位置在当前索引之前，即已被处理过）
+            is_merged = False
+            merged_text = ''
+            merge_start = -1
+            
+            for seg in english_segments:
+                if i > seg['start'] and i <= seg['end']:
+                    # 这是一个需要合并到前面英文格的字符
+                    is_merged = True
+                    break
+                elif i == seg['start']:
+                    # 这是一个英文段的开始，计算整个段的宽度
+                    seg_end = seg['end']
+                    en_text = ''.join(valid_ch[i:seg_end+1])
+                    # 英文宽度：增加字符宽度和间距，确保完整显示
+                    en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.3) * max(0, len(en_text) - 1)
+                    # 增加边距
+                    en_width += emu(fs * 0.3)
+                    
+                    new_cw.append(en_width)
+                    new_valid_py.append('')  # 拼音行留空
+                    new_valid_ch.append(en_text)  # 合并的英文文本
+                    i = seg_end + 1
+                    break
+            
+            if is_merged:
+                i += 1
+                continue
+            elif i < len(valid_ch):
+                # 中文字符：拼音宽度 + 拼音间距（1-2个字符宽度）
+                p = valid_py[i] if i < len(valid_py) else ''
+                # 拼音间距：fs*0.6 约等于1个字符宽度，确保不跨行
+                w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
+                new_cw.append(w)
+                new_valid_py.append(p)
+                new_valid_ch.append(valid_ch[i])
+                i += 1
+        
+        # 使用新的列信息
+        col_count = len(new_valid_ch)
+        if col_count == 0:
+            return None
+        
+        tw = sum(new_cw)
+        if tw > width:
+            fs = max(int(fs * width / tw), 10)
+            # 重新计算宽度
+            new_cw = []
+            i = 0
+            while i < len(valid_ch):
+                is_merged = False
+                for seg in english_segments:
+                    if i == seg['start']:
+                        seg_end = seg['end']
+                        en_text = ''.join(valid_ch[i:seg_end+1])
+                        # 英文宽度：增加字符宽度和间距，确保完整显示
+                        en_width = emu(fs * 0.6) * len(en_text) + emu(fs * 0.3) * max(0, len(en_text) - 1) + emu(fs * 0.3)
+                        new_cw.append(en_width)
+                        i = seg_end + 1
+                        is_merged = True
+                        break
+                if not is_merged and i < len(valid_ch):
+                    p = valid_py[i] if i < len(valid_py) else ''
+                    # 拼音间距：fs*0.6 约等于1个字符宽度
+                    # 没有拼音的字符（如标点）增加宽度
+                    if not p:
+                        w = emu(fs*0.6) * 1 + emu(fs*0.8)
+                    else:
+                        w = emu(fs*0.5) * (len(p) if p else 1) + emu(fs*0.6)
+                    new_cw.append(w)
+                    i += 1
+            tw = sum(new_cw)
+        
+        if not new_cw: new_cw = [width]
+        
+        # 根据占位符的对齐方式计算表格位置
+        from pptx.enum.text import PP_ALIGN
+        if alignment == PP_ALIGN.LEFT or alignment is None:
+            # 左对齐
+            table_left = left
+        elif alignment == PP_ALIGN.CENTER:
+            # 居中
+            table_left = left + (width - int(tw)) // 2
+        elif alignment == PP_ALIGN.RIGHT:
+            # 右对齐
+            table_left = left + width - int(tw)
+        else:
+            # 默认左对齐
+            table_left = left
+        
+        # 表格实际高度使用传入的完整height，不分割
+        tbl_shape = slide.shapes.add_table(2, col_count, table_left, top, int(tw), height)
+        tbl = tbl_shape.table
+        
+        for i, w in enumerate(new_cw[:col_count]): 
+            tbl.columns[i].width = int(w)
+        
+        # 两行高度加起来要等于总高度
+        row1_height = int(height * 0.45)
+        row2_height = height - row1_height
+        tbl.rows[0].height = row1_height
+        tbl.rows[1].height = row2_height
+        
+        for ci in range(col_count):
+            if ci < len(new_valid_py) and ci < len(new_valid_ch):
+                p, c = new_valid_py[ci], new_valid_ch[ci]
+                for ri, txt in enumerate([p, c]):
+                    cell = tbl.cell(ri, ci)
+                    cell.text = txt if txt else ''
+                    cell.text_frame.word_wrap = True
+                    # 设置单元格边距为0（无边距）
+                    cell.text_frame.margin_top = 0
+                    cell.text_frame.margin_bottom = 0
+                    cell.text_frame.margin_left = 0
+                    cell.text_frame.margin_right = 0
+                    
+                    # 根据字符类型设置字体
+                    # 拼音行（ri==0）：始终使用黑体
+                    # 汉字/英文行（ri==1）：英文用Arial，中文用SimHei
+                    if ri == 0:
+                        # 拼音行
+                        font_name = 'SimHei'
+                    else:
+                        # 汉字/英文行
+                        font_name = _get_font_name(txt)
+                    pa = cell.text_frame.paragraphs[0]
+                    pa.font.size = Pt(fs)
+                    pa.font.name = font_name
+                    pa.font.bold = bold
+                    pa.font.color.rgb = RGBColor(0, 0, 0)
+                    pa.alignment = PP_ALIGN.CENTER
+                    cell.vertical_anchor = MSO_ANCHOR.BOTTOM if ri == 0 else MSO_ANCHOR.TOP
+        
+        self._hide_borders(tbl)
+        return tbl_shape
+
+    def _hide_borders(self, tbl):
+        """彻底隐藏表格边框和背景，实现真正透明"""
+        ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+        # 1. 移除内置表格样式（这是白色底色的根源）
+        tblPr = tbl._tbl.tblPr
+        if tblPr is not None:
+            for style_id in tblPr.findall(f'{{{ns_a}}}tableStyleId'):
+                tblPr.remove(style_id)
+            tblPr.set('firstRow', '0')
+            tblPr.set('bandRow', '0')
+            tblPr.set('firstCol', '0')
+            tblPr.set('lastRow', '0')
+            tblPr.set('lastCol', '0')
+
+        # 2. 每个单元格：四边框 noFill + 单元格背景 noFill
+        for row in tbl.rows:
+            for cell in row.cells:
+                tcPr = cell._tc.get_or_add_tcPr()
+                # 清除已有的边框和填充
+                for ch in list(tcPr):
+                    tag = ch.tag.split('}')[-1] if '}' in ch.tag else ch.tag
+                    if tag in ('lnL','lnR','lnT','lnB','solidFill','noFill'):
+                        tcPr.remove(ch)
+                # 显式设置四边框为无
+                for border in ('lnL', 'lnR', 'lnT', 'lnB'):
+                    ln = etree.SubElement(tcPr, f'{{{ns_a}}}{border}')
+                    ln.set('w', '0')
+                    ln.set('cap', 'flat')
+                    etree.SubElement(ln, f'{{{ns_a}}}noFill')
+                # 单元格背景透明
+                etree.SubElement(tcPr, f'{{{ns_a}}}noFill')
+
+    # ── 占位符操作 ────────────────────────────────────────
+
+    def _find_all_placeholders(self, slide):
+        ph = {}
+        self._find_placeholders_recursive(slide.shapes, ph)
+        return ph
+    
+    def _find_placeholders_recursive(self, shapes, ph, path=''):
+        """递归查找所有形状中的占位符"""
+        for s in shapes:
+            if s.has_text_frame:
+                for m in re.findall(r'\{\{(\w+)\}\}', s.text_frame.text):
+                    ph.setdefault(m, s)
+            # 递归查找GROUP中的形状
+            if s.shape_type == 6:  # GROUP
+                self._find_placeholders_recursive(s.shapes, ph, path + 'G/')
+
+    def _adjust_font_size_to_fit(self, s, content, fs):
+        """
+        自动调整字体大小，确保文本能放入文本框
+        如果文本超出文本框范围，逐步减小字体大小直到刚好能放下
+        """
+        # 估算文本框能容纳的字符数
+        # 中文字符宽度约 0.6 倍字体高度，英文约 0.5 倍
+        # 行高约 1.2 倍字体高度
+        width_emu = s.width
+        height_emu = s.height
+        
+        # 转换为 pt (1pt = 12700 emu)
+        width_pt = width_emu / 12700
+        height_pt = height_emu / 12700
+        
+        # 估算每行能容纳的字符数（考虑中英文混合）
+        # 中文字符宽约 1em，英文约 0.5em，假设50%中文
+        char_width_factor = 0.6  # 平均字符宽度因子
+        chars_per_line = int(width_pt / (fs * char_width_factor))
+        
+        # 估算能容纳的行数
+        line_height_factor = 1.2  # 行高因子
+        max_lines = int(height_pt / (fs * line_height_factor))
+        
+        # 计算能容纳的总字符数
+        max_chars = chars_per_line * max_lines
+        
+        # 检查是否需要调整字体大小
+        actual_chars = len(content)
+        
+        if actual_chars <= max_chars:
+            return fs  # 不需要调整
+        
+        # 需要调整：逐步减小字体大小
+        min_fs = 8  # 最小字体 8pt
+        new_fs = fs
+        
+        while new_fs > min_fs and actual_chars > max_chars:
+            new_fs -= 2  # 每次减小 2pt
+            
+            # 重新估算
+            chars_per_line = int(width_pt / (new_fs * char_width_factor))
+            max_lines = int(height_pt / (new_fs * line_height_factor))
+            max_chars = chars_per_line * max_lines
+        
+        return new_fs if new_fs >= min_fs else min_fs
+    
+    def _fill(self, slide, name, content, fs=24, bold=False):
+        ph = self._find_all_placeholders(slide)
+        if name not in ph: return False
+        s = ph[name]
+        
+        # 获取占位符的对齐方式
+        alignment = None
+        if s.text_frame.paragraphs:
+            alignment = s.text_frame.paragraphs[0].alignment
+        
+        # 自动调整字体大小，确保文本能放入文本框
+        fs = self._adjust_font_size_to_fit(s, content, fs)
+        
+        # 检查是否包含汉字
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in content)
+        
+        # 检查是否为纯英文（无汉字，只有英文和空格）
+        is_english_only = not has_chinese and bool(content.strip()) and all(c.isascii() or c.isspace() for c in content)
+        
+        if has_chinese or is_english_only:
+            # 有汉字或纯英文：用拼音表格处理，传入对齐方式
+            # 纯英文时 is_english_only=True，会合并单元格
+            self._create_pinyin_table(slide, s.left, s.top, s.width, s.height, content, fs, alignment, is_english_only, bold)
+        else:
+            # 无汉字且非纯英文：直接设置文本框内容，保留换行符
+            s.text_frame.clear()
+            
+            # 检查是否有手动换行符
+            has_manual_break = '\n' in content
+            
+            if has_manual_break:
+                # 有换行符：按\n分割添加段落，每段单独处理混合字体
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if i == 0:
+                        s.text_frame.paragraphs[0].text = line
+                        _set_mixed_font(s.text_frame, fs)
+                    else:
+                        p = s.text_frame.add_paragraph()
+                        p.text = line
+                        # 为新段落设置混合字体
+                        if p.text_frame:
+                            _set_mixed_font(p.text_frame, fs)
+            else:
+                # 无换行符：设置文本框允许自动换行，使用混合字体
+                _set_mixed_font(s.text_frame, fs)
+                s.text_frame.word_wrap = True  # 允许自动换行
+        
+        s.left = Emu(0)
+        return True
+
+    def _center_text(self, slide, name):
+        """将指定占位符的文本完全居中（垂直+水平）"""
+        ph = self._find_all_placeholders(slide)
+        if name not in ph:
+            return
+        s = ph[name]
+        # 设置文本框在页面中居中
+        slide_width = self.prs.slide_width
+        slide_height = self.prs.slide_height
+        # 计算居中位置
+        new_left = (slide_width - s.width) // 2
+        new_top = (slide_height - s.height) // 2
+        s.left = new_left
+        s.top = new_top
+        # 设置文本居中
+        for p in s.text_frame.paragraphs:
+            p.alignment = PP_ALIGN.CENTER
+    
+    def _center_horizontal(self, slide, name):
+        """将指定占位符的文本水平居中，保留垂直位置"""
+        ph = self._find_all_placeholders(slide)
+        if name not in ph:
+            return
+        s = ph[name]
+        # 水平居中，垂直位置保持不变
+        slide_width = self.prs.slide_width
+        new_left = (slide_width - s.width) // 2
+        s.left = new_left
+        # 设置文本居中
+        for p in s.text_frame.paragraphs:
+            p.alignment = PP_ALIGN.CENTER
+
+    def _clear_unused(self, slide, used):
+        """清除未使用的占位符（文本框和图片）"""
+        # 清除文本占位符 - 清除所有仍包含{{...}}的占位符
+        for name, s in self._find_all_placeholders(slide).items():
+            if name not in used or '{{' in s.text_frame.text:
+                s.text_frame.clear()
+                s.left = Emu(0)
+        
+        # 隐藏未使用的图片占位符（移到页面外）
+        # 检查幻灯片中所有图片，根据位置判断是否已使用
+        all_pics = list(slide.shapes)
+        for i, s in enumerate(all_pics):
+            if s.shape_type == 13:  # PICTURE
+                # 如果图片被移到页面左侧外（-100000），说明是被隐藏的未使用图片
+                # 保留在正确位置的图片
+                pass  # 不再隐藏图片，因为已正确替换
+
+    # ── 填充单页 ─────────────────────────────────────────
+
+    def _fill_slide(self, slide, typ, data, num):
+        if typ == 'cover':
+            # 封面标题：黑体，48pt，水平居中，垂直位置与模板一致
+            self._fill(slide, 'h0_0', data, 48)
+            # 水平居中处理，垂直位置保持模板
+            self._center_horizontal(slide, 'h0_0')
+            self._clear_unused(slide, ['h0_0'])
+            print(f"  {num}. 封面: {data}")
+        elif typ == 'section':
+            # 章节标题：黑体，66pt，完全居中（垂直+水平）
+            self._fill(slide, 'h1_0', data, 66)
+            # 完全居中处理
+            self._center_text(slide, 'h1_0')
+            self._clear_unused(slide, ['h1_0'])
+            print(f"  {num}. 章节: {data}")
+        elif typ == 'content':
+            used = ['h2_0']
+            # 三级标题：黑体，28pt，保持占位符位置
+            self._fill(slide, 'h2_0', data['title'], 28, bold=True)
+            
+            # 获取原始文本内容
+            content_list = list(data.get('content', []))
+            
+            # 获取音视频文件和链接
+            audio = data.get('audio')
+            video = data.get('video')
+            link = data.get('link')  # 新增：获取链接
+            
+            # 检查模板是否有 {{audio}}、{{video}} 或 {{link}} 占位符
+            ph = self._find_all_placeholders(slide)
+            
+            # 尝试嵌入链接（需要在音频和视频之前处理，因为可能匹配到link模板）
+            link_embedded = False
+            if link and 'link' in ph:
+                link_embedded = self._embed_link(slide, link)
+            
+            # 尝试嵌入音频到占位符
+            audio_embedded = False
+            if audio and 'audio' in ph:
+                audio_embedded = self._embed_media_to_placeholder(slide, 'audio', audio)
+            
+            # 尝试嵌入视频到占位符（如果没有占位符，尝试使用备用位置）
+            video_embedded = False
+            if video:
+                if 'video' in ph:
+                    video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+                else:
+                    # 没有video占位符时，尝试使用audio占位符位置
+                    video_embedded = self._embed_media_to_placeholder(slide, 'video', video)
+                    # 如果还是失败，尝试直接嵌入
+                    if not video_embedded:
+                        video_embedded = self._embed_media_direct(slide, video)
+            
+            # 如果嵌入失败，将音视频标记追加到最后一个文本框
+            if audio and not audio_embedded:
+                audio_mark = f"[🔊 点击播放: {os.path.basename(audio)}]"
+                if content_list:
+                    # 追加到最后一个文本框
+                    content_list[-1] = content_list[-1] + " " + audio_mark
+                else:
+                    content_list.append(audio_mark)
+            
+            if video and not video_embedded:
+                video_mark = f"[🎬 点击播放: {os.path.basename(video)}]"
+                if content_list:
+                    content_list[-1] = content_list[-1] + " " + video_mark
+                else:
+                    content_list.append(video_mark)
+            
+            # 模板不足时，在左上角添加提示
+            if data.get('need_auto_gen') and data.get('template_hint'):
+                hint_text = data['template_hint']
+                # 在左上角添加提示文本框
+                left = Emu(100000)  # 1cm
+                top = Emu(200000)   # 2cm
+                width = Emu(8000000)  # 8cm
+                height = Emu(500000)  # 0.5cm
+                tx_box = slide.shapes.add_textbox(left, top, width, height)
+                tf = tx_box.text_frame
+                p = tf.paragraphs[0]
+                p.text = hint_text
+                p.font.size = Pt(12)
+                p.font.name = 'SimHei'
+                p.font.color.rgb = RGBColor(255, 0, 0)  # 红色
+                p.alignment = PP_ALIGN.LEFT
+                used.append('hint')
+            
+            # 填充所有文本框 - 字体大小24-40pt，同一页多框时一致
+            # 先获取图片列表（用于判断是否无图片）
+            images = data.get('images', [])
+            
+            if not content_list:
+                fs = 24
+            else:
+                # 根据文本框数量选择字体大小
+                # 1框: 40pt, 2框: 36pt, 3框: 30pt, 4框: 24pt
+                box_count = len(content_list)
+                
+                # 检查是否满足字号28的条件：
+                # 1. 只有1或2个文本框
+                # 2. 没有图片
+                # 3. 文本框内中文字符数超过10个
+                chinese_count = 0
+                for t in content_list:
+                    chinese_count += sum(1 for c in t if '\u4e00' <= c <= '\u9fff')
+                
+                if box_count in [1, 2] and not images and chinese_count > 10:
+                    # 满足条件：1-2个文本框，无图片，中文>10
+                    fs = 28
+                elif box_count == 1:
+                    fs = 40
+                elif box_count == 2:
+                    fs = 36
+                elif box_count == 3:
+                    fs = 30
+                else:
+                    fs = 24
+            
+            for j, t in enumerate(content_list):
+                self._fill(slide, f'h3_{j}', t, fs); used.append(f'h3_{j}')
+            self._clear_unused(slide, used)
+            
+            # 替换图片
+            if images:
+                # 记录已替换的图片数量
+                replaced_count = self._replace_images_on_slide(slide, images)
+                # 标记已使用的图片位置
+                for i in range(replaced_count):
+                    used.append(f'pic_{i}')
+            n_img = len(images)
+            
+            # 标记音频占位符为已使用
+            if audio and 'audio' in ph:
+                used.append('audio')
+            
+            # 标记视频占位符为已使用
+            if video and 'video' in ph:
+                used.append('video')
+            
+            # 统计信息
+            audio_mark_type = "🔊" if audio else ""
+            video_mark_type = "🎬" if video else ""
+            print(f"  {num}. 正文: {data['title']} ({len(content_list)}文本框, {n_img}图片{audio_mark_type}{video_mark_type})")
+        elif typ == 'end':
+            print(f"  {num}. 结束页")
+
+    # ── 生成 ─────────────────────────────────────────────
+
+    def generate(self):
+        print("\n=== 开始生成PPT (V13) ===")
+
+        # 构建页面计划
+        pages = []
+        # 每个 (text_count, img_count, media_type) 组合独立计数轮换
+        ptr = {}
+
+        def next_content(text_count, img_count, media_type=None):
+            """根据文本框数、图片数和媒体类型匹配模板，返回模板页索引"""
+            templates = self._match_content_template(text_count, img_count, media_type)
+            if not templates:
+                return None
+            # 用匹配到的模板列表做轮换
+            key = id(templates)  # 用列表 id 做 key，因为同一个列表对象会被复用
+            # 但更好的方式是用 tuple
+            tkey = tuple(templates)
+            if tkey not in ptr:
+                ptr[tkey] = 0
+            idx = templates[ptr[tkey] % len(templates)]
+            ptr[tkey] += 1
+            return idx
+
+        if self.md_content.get('h0') and self.templates['cover'] is not None:
+            pages.append(('cover', self.templates['cover'], self.md_content['h0'][0]))
+
+        cur_sec = None
+        for h2 in self.md_content['h2']:
+            sec = h2.get('section', '')
+            if sec and sec != cur_sec and self.templates['section'] is not None:
+                cur_sec = sec
+                pages.append(('section', self.templates['section'], sec))
+
+            # 确定媒体类型（video > audio > link > None）
+            if h2.get('video'):
+                media_type = 'video'
+            elif h2.get('audio'):
+                media_type = 'audio'
+            elif h2.get('link'):
+                media_type = 'link'
+            else:
+                media_type = None
+            
+            # 文本框数量（包含音视频时保留文本框数量）
+            text_count = len(h2.get('content', []))
+            img_count = len(h2.get('images', []))
+            
+            idx = next_content(text_count, img_count, media_type)
+            if idx is not None:
+                pages.append(('content', idx, h2))
+                audio_mark = " 🔊" if h2.get('audio') else ""
+                video_mark = " 🎬" if h2.get('video') else ""
+                media_str = f", {media_type}" if media_type else ""
+                print(f"  匹配: {h2['title']} ({text_count}文本框, {img_count}图片{media_str}) → 模板页{idx+1}")
+            else:
+                # 找不到精确匹配时，标记需要智能生成
+                print(f"  ⚠️ 模板不足，需要补充{text_count}文本框{img_count}图片的模板: {h2['title']}")
+                # 标记该页需要智能生成
+                h2['need_auto_gen'] = True
+                h2['template_hint'] = f"模版不足，需要补充{text_count}文本框{img_count}图片的模版"
+                # 使用第一个正文模板作为基础
+                first_content_templates = list(self.content_index.values())[0] if self.content_index else []
+                if first_content_templates:
+                    pages.append(('content', first_content_templates[0], h2))
+
+        if self.templates['end'] is not None:
+            pages.append(('end', self.templates['end'], None))
+
+        print(f"\n计划 {len(pages)} 页")
+
+        # 保存原始模板页的 rId 映射
+        orig_rIds = {}
+        for i in range(len(self.prs.slides)):
+            orig_rIds[i] = self.prs.slides._sldIdLst[i].rId
+
+        # 第一步：分配幻灯片（先克隆，不填充）
+        used_once = {}         # 模板idx -> True (已使用)
+        ordered_rIds = []      # 最终顺序的 rId 列表
+
+        for i, (typ, tidx, data) in enumerate(pages):
+            if tidx not in used_once:
+                used_once[tidx] = True
+                rId = orig_rIds[tidx]
+            else:
+                rId = self._clone_slide(tidx)
+            ordered_rIds.append(rId)
+
+        # 第二步：填充内容（克隆完成后再填充，避免克隆已填充的内容）
+        print("\n--- 填充内容 ---")
+        for i, (typ, tidx, data) in enumerate(pages):
+            rId = ordered_rIds[i]
+            slide = self._get_slide_by_rId(rId)
+            self._fill_slide(slide, typ, data, i + 1)
+
+        # 删除未使用的模板页
+        keep_rIds = set(ordered_rIds)
+        sldIdLst = self.prs.slides._sldIdLst
+        to_del = [s for s in list(sldIdLst) if s.rId not in keep_rIds]
+        for sldId in to_del:
+            self.prs.part.drop_rel(sldId.rId)
+            sldIdLst.remove(sldId)
+        print(f"\n删除 {len(to_del)} 页未使用模板")
+
+        # 按最终顺序重排 sldIdLst
+        rId_to_sldId = {s.rId: s for s in list(sldIdLst)}
+        for s in list(sldIdLst):
+            sldIdLst.remove(s)
+        for rId in ordered_rIds:
+            sldIdLst.append(rId_to_sldId[rId])
+
+        out = 'output.pptx'
+        self.prs.save(out)
+        print(f"\n=== 完成：{out}，共 {len(self.prs.slides)} 页 ===")
+        return out
+
+
+if __name__ == '__main__':
+    import sys
+    from md_parser import MDParser
+    if len(sys.argv) > 2:
+        md_path = sys.argv[1]
+        md_dir = os.path.dirname(os.path.abspath(md_path))
+        parser = MDParser(md_path)
+        PPTGenerator(sys.argv[2], parser.parse(), md_dir=md_dir).generate()
+    else:
+        print("用法: python ppt_generator.py <md文件> <模板文件>")
